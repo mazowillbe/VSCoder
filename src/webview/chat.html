@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #1e1e1e;
+            color: #ffffff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 100%;
+        }
+
+        .top-controls {
+            display: flex;
+            justify-content: flex-end;
+            padding: 8px;
+            gap: 8px;
+            border-bottom: 1px solid #404040;
+        }
+
+        .control-btn {
+            background: #404040;
+            border: none;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .control-btn:hover {
+            background: #505050;
+            transform: scale(1.05);
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:active {
+            transform: scale(0.95);
+        }
+
+        .tab-container {
+            display: flex;
+            background: #2d2d2d;
+            border-bottom: 1px solid #404040;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            background: #2d2d2d;
+            color: #8c8c8c;
+            cursor: pointer;
+            border-right: 1px solid #404040;
+            transition: background-color 0.2s;
+        }
+
+        .tab.active {
+            background: #1e1e1e;
+            color: #ffffff;
+            border-bottom: 2px solid #007acc;
+        }
+
+        .tab:hover {
+            background: #3c3c3c;
+        }
+
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: #2d2d2d;
+            border-bottom: 1px solid #404040;
+        }
+
+        .header-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .new-chat-btn {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        .new-chat-btn:hover {
+            background: #005a9e;
+        }
+
+        .test-btn {
+            margin-left: 10px;
+            padding: 5px 10px;
+            background: #404040;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .messages-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message-avatar.user {
+            background: #007acc;
+        }
+
+        .message-avatar.assistant {
+            background: #28a745;
+        }
+
+        .message-content {
+            padding: 8px 0;
+            max-width: 100%;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            text-align: right;
+        }
+
+        .message.assistant .message-content {
+            text-align: left;
+        }
+
+        .message-text {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-text {
+            color: white;
+        }
+
+        .message.assistant .message-text {
+            color: #ffffff;
+        }
+
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid #404040;
+            background: #2d2d2d;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+
+        .message-input {
+            flex: 1;
+            background: #1e1e1e;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #ffffff;
+            font-size: 14px;
+            resize: none;
+            min-height: 44px;
+            max-height: 120px;
+            font-family: inherit;
+            line-height: 1.4;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: #007acc;
+        }
+
+        .send-btn {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+            height: 44px;
+        }
+
+        .send-btn:hover {
+            background: #005a9e;
+        }
+
+        .send-btn:disabled {
+            background: #404040;
+            cursor: not-allowed;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #8c8c8c;
+        }
+
+        .welcome-title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #ffffff;
+        }
+
+        .welcome-subtitle {
+            font-size: 16px;
+            color: #8c8c8c;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Operation Notifications */
+        .operation-notification {
+            display: flex;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #2d2d2d;
+            border-radius: 8px;
+            border: 1px solid #404040;
+            margin-bottom: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .operation-notification.read,
+        .operation-notification.search {
+            background: transparent;
+            border: none;
+            padding: 4px 0;
+            margin-bottom: 4px;
+        }
+
+        .operation-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .operation-icon.read { background-color: #28a745; }
+        .operation-icon.write { background-color: #007acc; }
+        .operation-icon.create { background-color: #6f42c1; }
+        .operation-icon.delete { background-color: #d73a49; }
+        .operation-icon.search { background-color: #ffc107; color: #000; }
+
+        .operation-content {
+            flex: 1;
+            margin-left: 0;
+        }
+
+        .operation-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #ffffff;
+        }
+
+        .operation-title.read,
+        .operation-title.search {
+            color: #8c8c8c;
+            font-size: 13px;
+        }
+
+        .operation-title.read strong,
+        .operation-title.search strong {
+            font-weight: bold;
+        }
+
+        .operation-details {
+            font-size: 12px;
+            color: #8c8c8c;
+        }
+
+        /* Enhanced File Editing Notifications */
+        .file-edit-notification {
+            background-color: #191919 !important;
+            border: 1px solid #404040 !important;
+            border-radius: 8px !important;
+            padding: 12px 16px !important;
+            margin-bottom: 12px !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 12px !important;
+            min-height: 50px !important;
+            color: white !important;
+        }
+
+        .file-edit-notification.loading {
+            background-color: #191919 !important;
+            border: 1px solid #404040 !important;
+        }
+
+        .file-edit-notification.completed {
+            background-color: #191919 !important;
+            border: 1px solid #404040 !important;
+        }
+
+        .file-edit-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            font-weight: bold;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .file-edit-icon.write { background-color: #28a745; }
+        .file-edit-icon.create { background-color: #6f42c1; }
+        .file-edit-icon.delete { background-color: #d73a49; }
+
+        .file-edit-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #8c8c8c;
+            font-size: 13px;
+        }
+
+        .file-edit-filename {
+            font-weight: 600;
+            color: #8c8c8c;
+        }
+
+        .file-edit-stats {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #8c8c8c;
+        }
+
+        .file-edit-lines {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .lines-added {
+            color: #28a745;
+        }
+
+        .lines-removed {
+            color: #d73a49;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .status-completed {
+            background-color: #28a745;
+        }
+
+        .status-failed {
+            background-color: #d73a49;
+        }
+
+        .status-warning {
+            background-color: #ffc107;
+        }
+
+        .file-edit-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .action-icon {
+            cursor: pointer;
+            font-size: 14px;
+            color: #8c8c8c;
+            padding: 3px;
+            border-radius: 3px;
+            user-select: none;
+            transition: background-color 0.2s;
+        }
+
+        .action-icon:hover {
+            background-color: #404040;
+        }
+
+        .file-edit-diff {
+            display: none;
+            margin-top: 12px;
+            padding: 12px;
+            background: #2d2d2d;
+            border-radius: 6px;
+            border: 1px solid #404040;
+        }
+
+        .file-edit-diff.expanded {
+            display: block;
+        }
+
+        .diff-header {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #ffffff;
+        }
+
+        .diff-content {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            color: #cccccc;
+            white-space: pre-wrap;
+            background: #1e1e1e;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #404040;
+        }
+
+        .loading-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #404040;
+            border-top: 2px solid #007acc;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+            color: #8c8c8c;
+            font-size: 12px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Confirmation Request */
+        .confirmation-request {
+            background: #2d2d2d;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .confirmation-header {
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #ffc107;
+        }
+
+        .confirmation-content {
+            margin-bottom: 16px;
+            color: #cccccc;
+        }
+
+        .confirmation-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .confirmation-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        .confirm-btn {
+            background: #28a745;
+            color: white;
+        }
+
+        .confirm-btn:hover {
+            background: #1e7e34;
+        }
+
+        .reject-btn {
+            background: #d73a49;
+            color: white;
+        }
+
+        .reject-btn:hover {
+            background: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="top-controls">
+            <button class="control-btn" title="Add Tab">+</button>
+            <button class="control-btn" title="Settings" onclick="openSettings()">⚙️</button>
+        </div>
+        
+        <div class="tab-container">
+            <div class="tab active">Gemini AI Chat</div>
+        </div>
+        
+        <div class="chat-header">
+            <div class="header-title">AI Assistant</div>
+            <button class="new-chat-btn" onclick="newChat()">New Chat</button>
+    
+        </div>
+        
+        <div class="messages-area" id="messagesArea">
+            <div class="welcome-message">
+                <div class="welcome-title">Welcome to AI Assistant</div>
+                <div class="welcome-subtitle">
+                    How can I help you today?
+                </div>
+            </div>
+        </div>
+        
+        <div class="input-area">
+            <div class="input-container">
+                <textarea 
+                    class="message-input" 
+                    id="messageInput" 
+                    placeholder="Type your message here..."
+                    rows="1"
+                ></textarea>
+                <button class="send-btn" onclick="sendMessage()" id="sendBtn">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Acquire VS Code API
+        const vscode = acquireVsCodeApi();
+        
+        const messagesArea = document.getElementById('messagesArea');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        // Auto-resize textarea
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            sendBtn.disabled = true;
+
+            // Send message to VS Code extension
+            vscode.postMessage({
+                command: 'sendMessage',
+                text: text
+            });
+        }
+
+        function addMessage(type, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = `message-avatar ${type}`;
+            avatar.textContent = type === 'user' ? 'U' : 'A';
+            
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            
+            const messageText = document.createElement('div');
+            messageText.className = 'message-text';
+            messageText.textContent = text;
+            
+            content.appendChild(messageText);
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(content);
+            
+            messagesArea.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function newChat() {
+            messagesArea.innerHTML = `
+                <div class="welcome-message">
+                    <div class="welcome-title">New Chat Started</div>
+                    <div class="welcome-subtitle">
+                        How can I help you today?
+                    </div>
+                </div>
+            `;
+            messageInput.focus();
+        }
+
+        function openSettings() {
+            console.log('openSettings function called');
+            // Send message to VS Code extension to open settings
+            vscode.postMessage({
+                command: 'openSettings'
+            });
+            console.log('openSettings message sent to extension');
+        }
+
+        function addOperationNotification(operation) {
+            console.log('addOperationNotification called with:', operation);
+            const isReadOperation = operation.type === 'read';
+            const isListedOperation = operation.type === 'search' && operation.message.startsWith('Listed ');
+            const isGrepOperation = operation.type === 'search' && operation.message.startsWith('Grepped ');
+            const isSemanticOperation = operation.type === 'search' && operation.message.startsWith('Semantic searched ');
+            const isFileEditOperation = operation.type === 'write' || operation.type === 'create' || operation.type === 'delete';
+            const shouldUseReadStyle = isReadOperation || isListedOperation || isGrepOperation || isSemanticOperation;
+            
+            console.log('Operation types:', {
+                isReadOperation,
+                isListedOperation,
+                isFileEditOperation,
+                shouldUseReadStyle
+            });
+            
+            // Check if this is a detailed file edit operation (has linesAdded/linesRemoved/content)
+            const isDetailedFileEdit = isFileEditOperation && (operation.linesAdded !== undefined || operation.linesRemoved !== undefined || operation.content);
+            
+            if (isDetailedFileEdit) {
+                // Use the detailed file edit notification system
+                console.log('Using detailed file edit notification for:', operation);
+                const notificationDiv = addFileEditNotification(operation);
+                // Update it immediately to completed state since we have all the data
+                updateFileEditToCompleted(notificationDiv, operation);
+                return;
+            }
+            
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = `operation-notification ${shouldUseReadStyle ? 'read' : ''}`;
+            
+            let icon = null;
+            if (!shouldUseReadStyle) {
+                // Only show icon for non-read and non-listed operations
+                icon = document.createElement('div');
+                icon.className = `operation-icon ${operation.type}`;
+                icon.textContent = getFileIconText(operation.fileType || 'file');
+            }
+            
+            const content = document.createElement('div');
+            content.className = 'operation-content';
+            
+            const title = document.createElement('div');
+            title.className = `operation-title ${shouldUseReadStyle ? 'read' : ''} ${operation.type === 'search' ? 'search' : ''}`;
+            
+            if (operation.type === 'read' && operation.message.startsWith('Read ')) {
+                // For read operations, wrap "Read" in strong tag
+                const message = operation.message;
+                const readIndex = message.indexOf('Read ');
+                if (readIndex !== -1) {
+                    title.innerHTML = `<strong>Read</strong>${message.substring(4)}`;
+                } else {
+                    title.textContent = operation.message;
+                }
+            } else if (operation.type === 'search' && operation.message.startsWith('Listed ')) {
+                // For directory listing operations, wrap "Listed" in strong tag
+                const message = operation.message;
+                const listedIndex = message.indexOf('Listed ');
+                if (listedIndex !== -1) {
+                    title.innerHTML = `<strong>Listed</strong> ${message.substring(7)}`;
+                } else {
+                    title.textContent = operation.message;
+                }
+            } else if (operation.type === 'search' && operation.message.startsWith('Grepped ')) {
+                // For grep operations, wrap "Grepped" in strong tag
+                const message = operation.message;
+                const greppedIndex = message.indexOf('Grepped ');
+                if (greppedIndex !== -1) {
+                    title.innerHTML = `<strong>Grepped</strong> ${message.substring(8)}`;
+                } else {
+                    title.textContent = operation.message;
+                }
+            } else if (operation.type === 'search' && operation.message.startsWith('Semantic searched ')) {
+                // For semantic search operations, wrap "Semantic searched" in strong tag
+                const message = operation.message;
+                const semanticIndex = message.indexOf('Semantic searched ');
+                if (semanticIndex !== -1) {
+                    title.innerHTML = `<strong>Semantic searched</strong> ${message.substring(18)}`;
+                } else {
+                    title.textContent = operation.message;
+                }
+            } else {
+                title.textContent = operation.message;
+            }
+            
+            // Only show details for non-read and non-listed operations
+            if (!shouldUseReadStyle) {
+                const details = document.createElement('div');
+                details.className = 'operation-details';
+                
+                if (operation.fileName) {
+                    details.textContent = `${operation.fileName}`;
+                    if (operation.linesAdded || operation.linesRemoved) {
+                        details.textContent += ` • +${operation.linesAdded || 0} -${operation.linesRemoved || 0}`;
+                    }
+                }
+                
+                content.appendChild(title);
+                content.appendChild(details);
+            } else {
+                // For read and listed operations, only add the title
+                content.appendChild(title);
+            }
+            
+            if (icon) {
+                notificationDiv.appendChild(icon);
+            }
+            notificationDiv.appendChild(content);
+            
+            messagesArea.appendChild(notificationDiv);
+            scrollToBottom();
+        }
+
+        function addFileEditNotification(operation) {
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = 'file-edit-notification loading';
+            notificationDiv.setAttribute('data-operation-id', operation.operationId || `op_${Date.now()}`);
+            
+            // File type icon
+            const icon = document.createElement('div');
+            icon.className = `file-edit-icon ${operation.type}`;
+            icon.textContent = getFileIconText(operation.fileType || 'file');
+            
+            // Main content area
+            const content = document.createElement('div');
+            content.className = 'file-edit-content';
+            
+            // Filename
+            const filename = document.createElement('span');
+            filename.className = 'file-edit-filename';
+            filename.textContent = operation.fileName;
+            
+            // Loading spinner
+            const loadingSpinner = document.createElement('div');
+            loadingSpinner.className = 'loading-spinner';
+            
+            // Loading text
+            const loadingText = document.createElement('span');
+            loadingText.className = 'loading-text';
+            loadingText.textContent = 'Editing...';
+            
+            content.appendChild(filename);
+            content.appendChild(loadingSpinner);
+            content.appendChild(loadingText);
+            
+            // Assemble loading notification
+            notificationDiv.appendChild(icon);
+            notificationDiv.appendChild(content);
+            
+            messagesArea.appendChild(notificationDiv);
+            scrollToBottom();
+            
+            // Return the notification div so it can be updated later
+            return notificationDiv;
+        }
+
+        function addConfirmationRequest(actionId, message, action, params) {
+            const confirmationDiv = document.createElement('div');
+            confirmationDiv.className = 'confirmation-request';
+            
+            confirmationDiv.innerHTML = `
+                <div class="confirmation-header">Action Requires Confirmation</div>
+                <div class="confirmation-content">
+                    <p><strong>${action}:</strong> ${message}</p>
+                </div>
+                <div class="confirmation-actions">
+                    <button class="confirmation-btn confirm-btn" onclick="confirmAction('${actionId}', true)">✅ Confirm</button>
+                    <button class="confirmation-btn reject-btn" onclick="confirmAction('${actionId}', false)">❌ Reject</button>
+                </div>
+            `;
+            
+            messagesArea.appendChild(confirmationDiv);
+            scrollToBottom();
+        }
+
+        function confirmAction(actionId, approved) {
+            vscode.postMessage({
+                command: 'confirmationResponse',
+                actionId: actionId,
+                approved: approved
+            });
+            
+            // Remove the confirmation request
+            const confirmations = document.querySelectorAll('.confirmation-request');
+            confirmations.forEach(conf => {
+                if (conf.querySelector(`[onclick*="${actionId}"]`)) {
+                    conf.remove();
+                }
+            });
+        }
+
+        function getFileIconText(fileType) {
+            const icons = {
+                'ts': 'TS', 'js': 'JS', 'tsx': 'TSX', 'jsx': 'JSX',
+                'html': 'H', 'css': 'C', 'json': 'J', 'md': 'M',
+                'py': 'PY', 'java': 'J', 'cpp': 'C++', 'c': 'C',
+                'php': 'P', 'rb': 'R', 'go': 'GO', 'rs': 'RS',
+                'file': 'F', 'directory': 'D'
+            };
+            return icons[fileType] || fileType.charAt(0).toUpperCase();
+        }
+
+        function toggleFileDiff(notificationDiv, operation) {
+            console.log('toggleFileDiff called');
+            const diffSection = notificationDiv.querySelector('.file-edit-diff');
+            const expandIcon = notificationDiv.querySelector('.expand-icon');
+            
+            if (diffSection && expandIcon) {
+                if (diffSection.classList.contains('expanded')) {
+                    diffSection.classList.remove('expanded');
+                    expandIcon.innerHTML = '▼';
+                } else {
+                    diffSection.classList.add('expanded');
+                    expandIcon.innerHTML = '▲';
+                }
+            }
+        }
+
+        function acceptFileModification(operation) {
+            console.log('acceptFileModification called');
+            // Send accept message to VS Code extension
+            vscode.postMessage({
+                command: 'acceptFileModification',
+                operation: operation
+            });
+            
+            // Disable the accept and reject icons
+            const notificationDiv = document.querySelector(`[data-operation-id="${operation.operationId}"]`);
+            if (notificationDiv) {
+                const acceptIcon = notificationDiv.querySelector('.accept-icon');
+                const rejectIcon = notificationDiv.querySelector('.reject-icon');
+                if (acceptIcon) acceptIcon.style.pointerEvents = 'none';
+                if (rejectIcon) rejectIcon.style.pointerEvents = 'none';
+            }
+        }
+
+        function rejectFileModification(operation) {
+            console.log('rejectFileModification called');
+            // Send reject message to VS Code extension
+            vscode.postMessage({
+                command: 'rejectFileModification',
+                operation: operation
+            });
+            
+            // Disable the accept and reject icons
+            const notificationDiv = document.querySelector(`[data-operation-id="${operation.operationId}"]`);
+            if (notificationDiv) {
+                const acceptIcon = notificationDiv.querySelector('.accept-icon');
+                const rejectIcon = notificationDiv.querySelector('.reject-icon');
+                if (acceptIcon) acceptIcon.style.pointerEvents = 'none';
+                if (rejectIcon) rejectIcon.style.pointerEvents = 'none';
+            }
+        }
+
+        function updateFileEditToCompleted(notificationDiv, operation) {
+            // Remove loading class and add completed class
+            notificationDiv.classList.remove('loading');
+            notificationDiv.classList.add('completed');
+            
+            // Clear the content area
+            const content = notificationDiv.querySelector('.file-edit-content');
+            if (content) {
+                content.innerHTML = '';
+                
+                // Filename
+                const filename = document.createElement('span');
+                filename.className = 'file-edit-filename';
+                filename.textContent = operation.fileName;
+                
+                // Stats
+                const stats = document.createElement('div');
+                stats.className = 'file-edit-stats';
+                
+                // Lines added/removed
+                if (operation.linesAdded || operation.linesRemoved) {
+                    const linesInfo = document.createElement('div');
+                    linesInfo.className = 'file-edit-lines';
+                    
+                    if (operation.linesAdded) {
+                        const added = document.createElement('span');
+                        added.className = 'lines-added';
+                        added.textContent = `+${operation.linesAdded}`;
+                        linesInfo.appendChild(added);
+                    }
+                    
+                    if (operation.linesRemoved) {
+                        const removed = document.createElement('span');
+                        removed.className = 'lines-removed';
+                        removed.textContent = `-${operation.linesRemoved}`;
+                        linesInfo.appendChild(removed);
+                    }
+                    
+                    stats.appendChild(linesInfo);
+                }
+                
+                // Status indicator
+                let statusClass = 'status-completed';
+                let statusText = 'Completed';
+                
+                if (operation.hasErrors) {
+                    statusClass = 'status-failed';
+                    statusText = 'Failed';
+                } else if (operation.content && (operation.content.includes('warning') || operation.content.includes('lint'))) {
+                    statusClass = 'status-warning';
+                    statusText = 'Completed with warnings';
+                }
+                
+                const status = document.createElement('span');
+                status.className = `status-indicator ${statusClass}`;
+                status.title = statusText;
+                stats.appendChild(status);
+                
+                content.appendChild(filename);
+                content.appendChild(stats);
+            }
+            
+            // Add action icons
+            const actions = document.createElement('div');
+            actions.className = 'file-edit-actions';
+            
+            // Accept icon (tick)
+            const acceptIcon = document.createElement('span');
+            acceptIcon.className = 'action-icon accept-icon';
+            acceptIcon.innerHTML = '✓';
+            acceptIcon.title = 'Accept modification';
+            acceptIcon.addEventListener('click', () => acceptFileModification(operation));
+            
+            // Reject icon (X)
+            const rejectIcon = document.createElement('span');
+            rejectIcon.className = 'action-icon reject-icon';
+            rejectIcon.innerHTML = '✕';
+            rejectIcon.title = 'Reject modification';
+            rejectIcon.addEventListener('click', () => rejectFileModification(operation));
+            
+            // Expand icon (proper expand symbol)
+            const expandIcon = document.createElement('span');
+            expandIcon.className = 'action-icon expand-icon';
+            expandIcon.innerHTML = '▼';
+            expandIcon.title = 'Show diff';
+            expandIcon.addEventListener('click', () => toggleFileDiff(notificationDiv, operation));
+            
+            actions.appendChild(acceptIcon);
+            actions.appendChild(rejectIcon);
+            actions.appendChild(expandIcon);
+            
+            // Add actions to notification
+            notificationDiv.appendChild(actions);
+            
+            // Add diff section (initially hidden)
+            const diffSection = document.createElement('div');
+            diffSection.className = 'file-edit-diff';
+            
+            const diffHeader = document.createElement('div');
+            diffHeader.className = 'diff-header';
+            diffHeader.textContent = 'File Changes';
+            
+            const diffContent = document.createElement('div');
+            diffContent.className = 'diff-content';
+            diffContent.textContent = operation.content || 'No diff content available';
+            
+            diffSection.appendChild(diffHeader);
+            diffSection.appendChild(diffContent);
+            
+            notificationDiv.appendChild(diffSection);
+        }
+
+        function addCompletedFileEditNotification(operation) {
+            console.log('addCompletedFileEditNotification called with:', operation);
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = 'file-edit-notification completed';
+            notificationDiv.setAttribute('data-operation-id', operation.operationId || `op_${Date.now()}`);
+            
+            // File type icon
+            const icon = document.createElement('div');
+            icon.className = `file-edit-icon ${operation.type}`;
+            icon.textContent = getFileIconText(operation.fileType || 'file');
+            
+            // Main content area
+            const content = document.createElement('div');
+            content.className = 'file-edit-content';
+            
+            // Determine status and status color
+            let statusClass = 'status-completed';
+            let statusText = 'Completed';
+            
+            if (operation.hasErrors) {
+                statusClass = 'status-failed';
+                statusText = 'Failed';
+            } else if (operation.content && (operation.content.includes('warning') || operation.content.includes('lint'))) {
+                statusClass = 'status-warning';
+                statusText = 'Completed with warnings';
+            }
+            
+            // Filename
+            const filename = document.createElement('span');
+            filename.className = 'file-edit-filename';
+            filename.textContent = operation.fileName;
+            
+            // Stats
+            const stats = document.createElement('div');
+            stats.className = 'file-edit-stats';
+            
+            // Lines added/removed
+            if (operation.linesAdded || operation.linesRemoved) {
+                const linesInfo = document.createElement('div');
+                linesInfo.className = 'file-edit-lines';
+                
+                if (operation.linesAdded) {
+                    const added = document.createElement('span');
+                    added.className = 'lines-added';
+                    added.textContent = `+${operation.linesAdded}`;
+                    linesInfo.appendChild(added);
+                }
+                
+                if (operation.linesRemoved) {
+                    const removed = document.createElement('span');
+                    removed.className = 'lines-removed';
+                    removed.textContent = `-${operation.linesRemoved}`;
+                    linesInfo.appendChild(removed);
+                }
+                
+                stats.appendChild(linesInfo);
+            }
+            
+            // Status indicator
+            const status = document.createElement('span');
+            status.className = `status-indicator ${statusClass}`;
+            status.title = statusText;
+            stats.appendChild(status);
+            
+            content.appendChild(filename);
+            content.appendChild(stats);
+            
+            // Action icons
+            const actions = document.createElement('div');
+            actions.className = 'file-edit-actions';
+            
+            // Accept icon (tick)
+            const acceptIcon = document.createElement('span');
+            acceptIcon.className = 'action-icon accept-icon';
+            acceptIcon.innerHTML = '✓';
+            acceptIcon.title = 'Accept modification';
+            acceptIcon.addEventListener('click', () => acceptFileModification(operation));
+            
+            // Reject icon (X)
+            const rejectIcon = document.createElement('span');
+            rejectIcon.className = 'action-icon reject-icon';
+            rejectIcon.innerHTML = '✕';
+            rejectIcon.title = 'Reject modification';
+            rejectIcon.addEventListener('click', () => rejectFileModification(operation));
+            
+            // Expand icon (proper expand symbol)
+            const expandIcon = document.createElement('span');
+            expandIcon.className = 'action-icon expand-icon';
+            expandIcon.innerHTML = '▼';
+            expandIcon.title = 'Show diff';
+            expandIcon.addEventListener('click', () => toggleFileDiff(notificationDiv, operation));
+            
+            actions.appendChild(acceptIcon);
+            actions.appendChild(rejectIcon);
+            actions.appendChild(expandIcon);
+            
+            // Diff content (initially hidden)
+            const diffSection = document.createElement('div');
+            diffSection.className = 'file-edit-diff';
+            
+            const diffHeader = document.createElement('div');
+            diffHeader.className = 'diff-header';
+            diffHeader.textContent = 'File Changes';
+            
+            const diffContent = document.createElement('div');
+            diffContent.className = 'diff-content';
+            diffContent.textContent = operation.content || 'No diff content available';
+            
+            diffSection.appendChild(diffHeader);
+            diffSection.appendChild(diffContent);
+            
+            // Assemble completed notification
+            notificationDiv.appendChild(icon);
+            notificationDiv.appendChild(content);
+            notificationDiv.appendChild(actions);
+            notificationDiv.appendChild(diffSection);
+            
+            messagesArea.appendChild(notificationDiv);
+            scrollToBottom();
+            console.log('File edit notification added to DOM:', notificationDiv);
+        }
+
+        function scrollToBottom() {
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+        }
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            
+            switch (message.command) {
+                case 'addMessage':
+                    addMessage(message.type, message.text);
+                    break;
+                    
+                case 'addOperationNotification':
+                    addOperationNotification(message.operation);
+                    break;
+                    
+                case 'addConfirmationRequest':
+                    addConfirmationRequest(
+                        message.actionId,
+                        message.message,
+                        message.action,
+                        message.params
+                    );
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>
+

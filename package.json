@@ -1,0 +1,133 @@
+{
+  "name": "gemini-vscode-extension",
+  "displayName": "Gemini AI Assistant",
+  "description": "AI-powered coding assistant using Google Gemini through Genkit",
+  "version": "0.0.1",
+  "publisher": "gemini-ai-assistant",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:gemini-assistant.openChat"
+  ],
+  "main": "./out/extension.js",
+      "contributes": {
+
+      "commands": [
+        {
+          "command": "gemini-assistant.openChat",
+          "title": "Open Gemini Chat",
+          "category": "Gemini AI"
+        },
+        {
+          "command": "gemini-assistant.openSettings",
+          "title": "Open Gemini AI Settings",
+          "category": "Gemini AI"
+        },
+        {
+          "command": "gemini-assistant.test",
+          "title": "Test Gemini AI Assistant",
+          "category": "Gemini AI"
+        }
+      ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "gemini-assistant.openChat"
+        },
+        {
+          "command": "gemini-assistant.openSettings"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Gemini AI Assistant",
+      "properties": {
+        "geminiAssistant.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Your Google Gemini API key",
+          "scope": "application"
+        },
+        "geminiAssistant.model": {
+          "type": "string",
+          "default": "gemini-2.0-flash",
+          "enum": [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-latest"
+          ],
+          "description": "The Gemini model to use for AI responses"
+        },
+        "geminiAssistant.maxTurns": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of tool calling turns allowed"
+        },
+        "geminiAssistant.enableMCP": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable MCP (Model Context Protocol) server support"
+        },
+        "geminiAssistant.mcpServers": {
+          "type": "array",
+          "default": [],
+          "description": "List of MCP server configurations",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Display name for the MCP server"
+              },
+              "command": {
+                "type": "string",
+                "description": "Command to start the MCP server"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the MCP server command"
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables for the MCP server"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile && npm run copy-webview",
+    "compile": "tsc -p ./",
+    "copy-webview": "if not exist out\\webview mkdir out\\webview && xcopy src\\webview out\\webview /E /I /Y",
+    "watch": "npm run compile && npm run copy-webview",
+    "pretest": "npm run compile && npm run copy-webview && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^16.18.126",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "genkit-cli": "^1.14.1",
+    "typescript": "^5.0.0",
+    "vscode": "^1.1.37"
+  },
+  "dependencies": {
+    "@genkit-ai/googleai": "^1.18.0",
+    "genkit": "^1.18.0"
+  }
+}

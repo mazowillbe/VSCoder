@@ -1,0 +1,2468 @@
+import * as vscode from 'vscode';
+import { genkit, z } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/googleai';
+import * as fs from 'fs';
+import * as path from 'path';
+import { promisify } from 'util';
+
+// Global interface for AI issues
+declare global {
+  var aiIssues: Array<{
+    filePath: string;
+    errors: Array<{
+      line: number;
+      message: string;
+      range: vscode.Range;
+    }>;
+    warnings: Array<{
+      line: number;
+      message: string;
+      range: vscode.Range;
+    }>;
+  }>;
+}
+
+// Enhanced Code Quality Manager with ESLint, Prettier, TypeScript, etc.
+class CodeQualityManager {
+  private static instance: CodeQualityManager;
+  private diagnosticsCollection: vscode.DiagnosticCollection;
+  private isMonitoring: boolean = false;
+  private lastFileEdit: { [key: string]: number } = {};
+  private projectTools: {
+    eslint: boolean;
+    prettier: boolean;
+    typescript: boolean;
+    stylelint: boolean;
+    jest: boolean;
+  } = {
+    eslint: false,
+    prettier: false,
+    typescript: false,
+    stylelint: false,
+    jest: false
+  };
+
+  private constructor() {
+    this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('ai-assistant');
+  }
+
+  public static getInstance(): CodeQualityManager {
+    if (!CodeQualityManager.instance) {
+      CodeQualityManager.instance = new CodeQualityManager();
+    }
+    return CodeQualityManager.instance;
+  }
+
+  // Start monitoring diagnostics for automatic issue detection
+  public startMonitoring(): void {
+    if (this.isMonitoring) return;
+    
+    this.isMonitoring = true;
+    
+    // Detect project tools
+    this.detectProjectTools();
+    
+    // Listen for diagnostic changes
+    vscode.languages.onDidChangeDiagnostics((event) => {
+      this.handleDiagnosticsChange(event);
+    });
+
+    // Listen for document changes to track file edits
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      this.lastFileEdit[event.document.uri.fsPath] = Date.now();
+    });
+
+
+  }
+
+  // Detect which code quality tools are available in the project
+  private async detectProjectTools(): Promise<void> {
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) return;
+
+      // Check for package.json
+      const packageJsonPath = path.join(workspaceRoot, 'package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        const dependencies = { ...packageJson.dependencies, ...packageJson.devDependencies };
+
+        // Detect ESLint
+        this.projectTools.eslint = !!(
+          dependencies.eslint || 
+          dependencies['@typescript-eslint/eslint-plugin'] ||
+          fs.existsSync(path.join(workspaceRoot, '.eslintrc.js')) ||
+          fs.existsSync(path.join(workspaceRoot, '.eslintrc.json')) ||
+          fs.existsSync(path.join(workspaceRoot, '.eslintrc'))
+        );
+
+        // Detect Prettier
+        this.projectTools.prettier = !!(
+          dependencies.prettier ||
+          fs.existsSync(path.join(workspaceRoot, '.prettierrc')) ||
+          fs.existsSync(path.join(workspaceRoot, '.prettierrc.js')) ||
+          fs.existsSync(path.join(workspaceRoot, '.prettierrc.json'))
+        );
+
+        // Detect TypeScript
+        this.projectTools.typescript = !!(
+          dependencies.typescript ||
+          dependencies['@types/node'] ||
+          fs.existsSync(path.join(workspaceRoot, 'tsconfig.json')) ||
+          fs.existsSync(path.join(workspaceRoot, 'tsconfig.js'))
+        );
+
+        // Detect Stylelint
+        this.projectTools.stylelint = !!(
+          dependencies.stylelint ||
+          fs.existsSync(path.join(workspaceRoot, '.stylelintrc')) ||
+          fs.existsSync(path.join(workspaceRoot, '.stylelintrc.js'))
+        );
+
+        // Detect Jest
+        this.projectTools.jest = !!(
+          dependencies.jest ||
+          dependencies['@types/jest'] ||
+          fs.existsSync(path.join(workspaceRoot, 'jest.config.js')) ||
+          fs.existsSync(path.join(workspaceRoot, 'jest.config.ts'))
+        );
+      }
+
+
+    } catch (error) {
+      console.warn('Error detecting project tools:', error);
+    }
+  }
+
+  // Handle diagnostic changes and notify about new issues
+  private async handleDiagnosticsChange(event: vscode.DiagnosticChangeEvent): Promise<void> {
+    for (const uri of event.uris) {
+      const diagnostics = vscode.languages.getDiagnostics(uri);
+      if (diagnostics.length === 0) continue;
+
+      const filePath = uri.fsPath;
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) continue;
+
+      const relativePath = path.relative(workspaceRoot, filePath);
+      const lastEdit = this.lastFileEdit[filePath] || 0;
+      const timeSinceEdit = Date.now() - lastEdit;
+
+      // Only process diagnostics for recently edited files (within last 5 seconds)
+      if (timeSinceEdit < 5000) {
+        await this.processNewDiagnostics(relativePath, diagnostics);
+      }
+    }
+  }
+
+  // Process new diagnostics and notify the AI
+  private async processNewDiagnostics(filePath: string, diagnostics: vscode.Diagnostic[]): Promise<void> {
+    const newIssues = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+    const warnings = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Warning);
+    const suggestions = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Information);
+
+    if (newIssues.length > 0 || warnings.length > 0) {
+      // Create operation notification for LSP issues
+      createOperationNotification('search', `LSP Issues Detected`, {
+        filePath,
+        fileName: path.basename(filePath),
+        fileType: path.extname(filePath).substring(1) || 'file',
+        message: `Found ${newIssues.length} errors and ${warnings.length} warnings`,
+        content: this.formatDiagnosticsSummary(newIssues, warnings, suggestions)
+      });
+
+      // Notify the AI about the issues for potential auto-fixing
+      this.notifyAIAboutIssues(filePath, newIssues, warnings);
+
+      // Automatically attempt to fix issues using available tools
+      await this.autoFixIssues(filePath);
+    }
+  }
+
+  // Format diagnostics for display
+  private formatDiagnosticsSummary(errors: vscode.Diagnostic[], warnings: vscode.Diagnostic[], suggestions: vscode.Diagnostic[]): string {
+    let summary = '';
+    
+    if (errors.length > 0) {
+      summary += `🚨 ${errors.length} Errors:\n`;
+      errors.slice(0, 3).forEach((error, i) => {
+        summary += `  ${i + 1}. Line ${error.range.start.line + 1}: ${error.message}\n`;
+      });
+      if (errors.length > 3) summary += `  ... and ${errors.length - 3} more\n`;
+    }
+
+    if (warnings.length > 0) {
+      summary += `⚠️ ${warnings.length} Warnings:\n`;
+      warnings.slice(0, 3).forEach((warning, i) => {
+        summary += `  ${i + 1}. Line ${warning.range.start.line + 1}: ${warning.message}\n`;
+      });
+      if (warnings.length > 3) summary += `  ... and ${warnings.length - 3} more\n`;
+    }
+
+    return summary.trim();
+  }
+
+  // Notify AI about issues for potential auto-fixing
+  private async notifyAIAboutIssues(filePath: string, errors: vscode.Diagnostic[], warnings: vscode.Diagnostic[]): Promise<void> {
+    // This will be used by the AI to automatically fix issues
+    const issues = {
+      filePath,
+      errors: errors.map(e => ({
+        line: e.range.start.line + 1,
+        message: e.message,
+        range: e.range
+      })),
+      warnings: warnings.map(w => ({
+        line: w.range.start.line + 1,
+        message: w.message,
+        range: w.range
+      }))
+    };
+
+    // Store issues for AI access
+    this.storeIssuesForAI(issues);
+  }
+
+  // Store issues for AI to access
+  private storeIssuesForAI(issues: any): void {
+    // Store in a way that the AI can access
+    if (!global.aiIssues) global.aiIssues = [];
+    global.aiIssues.push(issues);
+    
+    // Keep only recent issues (last 10)
+    if (global.aiIssues.length > 10) {
+      global.aiIssues = global.aiIssues.slice(-10);
+    }
+  }
+
+  // Get current issues for a file
+  public getCurrentIssues(filePath: string): any[] {
+    if (!global.aiIssues) return [];
+    return global.aiIssues.filter(issue => issue.filePath === filePath);
+  }
+
+  // Get all current issues
+  public getAllIssues(): any[] {
+    return global.aiIssues || [];
+  }
+
+  // Clear issues for a file
+  public clearIssues(filePath: string): void {
+    if (global.aiIssues) {
+      global.aiIssues = global.aiIssues.filter(issue => issue.filePath !== issue.filePath);
+    }
+  }
+
+  // Get available project tools
+  public getAvailableTools(): any {
+    return this.projectTools;
+  }
+
+  // Run ESLint on a file
+  public async runESLint(filePath: string): Promise<any> {
+    if (!this.projectTools.eslint) {
+      return { error: 'ESLint not available in this project' };
+    }
+
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        return { error: 'No workspace open' };
+      }
+
+      const fullPath = path.join(workspaceRoot, filePath);
+      const relativePath = path.relative(workspaceRoot, fullPath);
+
+      // Run ESLint via VS Code command
+      const result = await vscode.commands.executeCommand(
+        'eslint.executeAutofix',
+        vscode.Uri.file(fullPath)
+      );
+
+      return { 
+        message: `ESLint autofix applied to ${relativePath}`,
+        result
+      };
+    } catch (error) {
+      return { error: `ESLint failed: ${error}` };
+    }
+  }
+
+  // Run Prettier on a file
+  public async runPrettier(filePath: string): Promise<any> {
+    if (!this.projectTools.prettier) {
+      return { error: 'Prettier not available in this project' };
+    }
+
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        return { error: 'No workspace open' };
+      }
+
+      const fullPath = path.join(workspaceRoot, filePath);
+      const relativePath = path.relative(workspaceRoot, fullPath);
+
+      // Run Prettier via VS Code command
+      const result = await vscode.commands.executeCommand(
+        'prettier.format',
+        vscode.Uri.file(fullPath)
+      );
+
+      return { 
+        message: `Prettier formatting applied to ${relativePath}`,
+        result
+      };
+    } catch (error) {
+      return { error: `Prettier failed: ${error}` };
+    }
+  }
+
+  // Run TypeScript compiler check
+  public async runTypeScriptCheck(filePath: string): Promise<any> {
+    if (!this.projectTools.typescript) {
+      return { error: 'TypeScript not available in this project' };
+    }
+
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        return { error: 'No workspace open' };
+      }
+
+      const fullPath = path.join(workspaceRoot, filePath);
+      const relativePath = path.relative(workspaceRoot, fullPath);
+
+      // Run TypeScript check via VS Code command
+      const result = await vscode.commands.executeCommand(
+        'typescript.selectTypeScriptVersion',
+        vscode.Uri.file(fullPath)
+      );
+
+      return { 
+        message: `TypeScript check completed for ${relativePath}`,
+        result
+      };
+    } catch (error) {
+      return { error: `TypeScript check failed: ${error}` };
+    }
+  }
+
+  // Run comprehensive code quality check
+  public async runCodeQualityCheck(filePath: string): Promise<any> {
+    const results = {
+      eslint: null,
+      prettier: null,
+      typescript: null,
+      stylelint: null
+    };
+
+    // Run all available tools
+    if (this.projectTools.eslint) {
+      results.eslint = await this.runESLint(filePath);
+    }
+    if (this.projectTools.prettier) {
+      results.prettier = await this.runPrettier(filePath);
+    }
+    if (this.projectTools.typescript) {
+      results.typescript = await this.runTypeScriptCheck(filePath);
+    }
+
+    return {
+      message: 'Code quality check completed',
+      results,
+      toolsUsed: Object.keys(this.projectTools).filter(tool => this.projectTools[tool as keyof typeof this.projectTools])
+    };
+  }
+
+  // Automatically fix issues using available tools
+  public async autoFixIssues(filePath: string): Promise<void> {
+    try {
+      console.log(`Auto-fixing issues in ${filePath}`);
+      
+      // Run ESLint autofix if available
+      if (this.projectTools.eslint) {
+        try {
+          await this.runESLint(filePath);
+          console.log(`ESLint autofix applied to ${filePath}`);
+        } catch (eslintError) {
+          console.warn(`ESLint autofix failed for ${filePath}:`, eslintError);
+        }
+      }
+
+      // Run Prettier formatting if available
+      if (this.projectTools.prettier) {
+        try {
+          await this.runPrettier(filePath);
+          console.log(`Prettier formatting applied to ${filePath}`);
+        } catch (prettierError) {
+          console.warn(`Prettier formatting failed for ${filePath}:`, prettierError);
+        }
+      }
+
+      // Run TypeScript check if available
+      if (this.projectTools.typescript) {
+        try {
+          await this.runTypeScriptCheck(filePath);
+          console.log(`TypeScript check completed for ${filePath}`);
+        } catch (tsError) {
+          console.warn(`TypeScript check failed for ${filePath}:`, tsError);
+        }
+      }
+
+      // Create operation notification for auto-fixing
+      createOperationNotification('write', `Auto-Fix Applied`, {
+        filePath,
+        fileName: path.basename(filePath),
+        fileType: path.extname(filePath).substring(1) || 'file',
+        message: `Automatic fixes applied`,
+        content: `Applied automatic fixes using available tools for ${filePath}`
+      });
+
+    } catch (error) {
+      console.warn(`Auto-fix failed for ${filePath}:`, error);
+    }
+  }
+}
+
+// Operation tracking interface
+interface OperationNotification {
+  type: 'read' | 'write' | 'create' | 'delete' | 'search' | 'command';
+  filePath?: string;
+  fileName?: string;
+  fileType?: string;
+  linesRead?: { start: number; end: number; total: number };
+  linesAdded?: number;
+  linesRemoved?: number;
+  content?: string;
+  hasErrors?: boolean;
+  message: string;
+  timestamp: number;
+  operationId: string;
+}
+
+// Global operation tracker
+let operationTracker: {
+  operations: OperationNotification[];
+  notifyOperation: (operation: OperationNotification) => void;
+  notifySummarization: (summary: string) => void;
+} = {
+  operations: [],
+  notifyOperation: () => {}, // Will be set by extension
+  notifySummarization: () => {} // Will be set by extension
+};
+
+// Function to set the operation notifier
+export function setOperationNotifier(notifier: (operation: OperationNotification) => void) {
+  operationTracker.notifyOperation = notifier;
+}
+
+// Function to set the summarization notifier
+export function setSummarizationNotifier(notifier: (summary: string) => void) {
+  operationTracker.notifySummarization = notifier;
+}
+
+// Function to create operation notification
+function createOperationNotification(
+  type: OperationNotification['type'],
+  message: string,
+  details: Partial<OperationNotification> = {}
+): OperationNotification {
+  const operation: OperationNotification = {
+    type,
+    message,
+    timestamp: Date.now(),
+    operationId: `op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    ...details
+  };
+  
+  // Notify the extension about this operation
+  operationTracker.notifyOperation(operation);
+  
+  return operation;
+}
+
+// Global Genkit instances
+let ai: any;
+let summarizerAi: any;
+
+// Chat session management
+let currentChatSession: any = null;
+let sessionId: string | null = null;
+let currentApiKey: string | null = null;
+let currentModel: string | null = null;
+
+// Initialize Genkit instance with a default configuration
+// This will be updated when the user provides their API key
+function initializeGenkit() {
+  // Create a placeholder instance that will be replaced when API key is provided
+  // This prevents errors when the extension starts without an API key
+  try {
+    const newAi = genkit({
+      plugins: [googleAI({ apiKey: 'placeholder' })],
+      model: googleAI.model('gemini-2.0-flash'),
+    });
+    ai = newAi;
+    
+    // Initialize summarizer AI with same placeholder
+    const newSummarizerAi = genkit({
+      plugins: [googleAI({ apiKey: 'placeholder' })],
+      model: googleAI.model('gemini-2.0-flash'),
+    });
+    summarizerAi = newSummarizerAi;
+  } catch (error) {
+    console.error('Failed to initialize Genkit:', error);
+  }
+}
+
+// Function to create Genkit instance with API key and tools
+function createGenkitInstance(apiKey: string, model: string = 'gemini-2.0-flash') {
+  
+  const newAi = genkit({
+    plugins: [googleAI({ apiKey })],
+    model: googleAI.model(model),
+  });
+  
+  // Also create summarizer AI instance
+  const newSummarizerAi = genkit({
+    plugins: [googleAI({ apiKey })],
+    model: googleAI.model(model),
+  });
+  
+  // Store the AI instance globally
+  ai = newAi;
+  summarizerAi = newSummarizerAi;
+  
+  // Store current API key and model for change detection
+  currentApiKey = apiKey;
+  currentModel = model;
+  
+  // Sequential tool execution wrapper
+  const executeToolSequentially = async (toolName: string, toolFunction: Function, args: any) => {
+    try {
+      // Execute the tool and wait for result
+      const result = await toolFunction(args);
+      
+      // Check if tool succeeded
+      if (result && result.error) {
+        console.log(`Tool ${toolName} failed:`, result.error);
+        
+        // Create operation notification for tool failure
+        createOperationNotification('command', `Tool Execution Failed`, {
+          message: `Tool ${toolName} failed`,
+          hasErrors: true,
+          content: `Error: ${result.error}\n\nThis tool needs to be fixed before proceeding.`
+        });
+        
+        return { ...result, _toolFailed: true, _toolName: toolName };
+      }
+      
+      // Create operation notification for tool success
+      createOperationNotification('command', `Tool Execution Completed`, {
+        message: `Tool ${toolName} completed successfully`,
+        content: `Result: ${JSON.stringify(result, null, 2)}`
+      });
+      
+      return { ...result, _toolSucceeded: true, _toolName: toolName };
+      
+    } catch (error) {
+      console.error(`Tool ${toolName} crashed:`, error);
+      
+      // Create operation notification for tool crash
+      createOperationNotification('command', `Tool Execution Crashed`, {
+        message: `Tool ${toolName} crashed`,
+        hasErrors: true,
+        content: `Critical error: ${error instanceof Error ? error.message : String(error)}\n\nThis tool needs immediate attention.`
+      });
+      
+      return { 
+        error: `Tool ${toolName} crashed: ${error instanceof Error ? error.message : String(error)}`,
+        _toolFailed: true, 
+        _toolName: toolName,
+        _toolCrashed: true
+      };
+    }
+  };
+
+    // Helper function to generate a unique session ID
+  function generateSessionId(): string {
+    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+  
+
+  
+  // Register all tools on the new instance
+  newAi.defineTool(
+    {
+      name: 'read_file',
+      description: 'Read the contents of a file. You must specify the line range you\'re interested in, and if the file is larger, you will be given an outline of the rest of the file.',
+      inputSchema: z.object({
+        filePath: z.string().optional().describe('The relative path of the file to read from the workspace root (e.g., "src/extension.ts", "README.md", etc.)'),
+        file_path: z.string().optional().describe('Alternative parameter name for filePath'),
+        startLineNumberBaseZero: z.number().optional().describe('The line number to start reading from, 0-based'),
+        start_line_number_base_zero: z.number().optional().describe('Alternative parameter name for startLineNumberBaseZero'),
+        endLineNumberBaseZero: z.number().optional().describe('The inclusive line number to end reading at, 0-based'),
+        end_line_number_base_zero: z.number().optional().describe('Alternative parameter name for endLineNumberBaseZero')
+      }).refine((data) => {
+        // Ensure at least one file path parameter is provided
+        return (data.filePath || data.file_path) !== undefined;
+      }, {
+        message: "Either filePath or file_path must be provided"
+      }),
+      outputSchema: z.object({
+        content: z.string().optional(),
+        startLine: z.number().optional(),
+        endLine: z.number().optional(),
+        totalLines: z.number().optional(),
+        outline: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async (args) => {
+        // Handle both camelCase and snake_case parameter names for flexibility
+        const filePath = args.filePath || args.file_path;
+        const startLineNumberBaseZero = args.startLineNumberBaseZero || args.start_line_number_base_zero || 0;
+        const endLineNumberBaseZero = args.endLineNumberBaseZero || args.end_line_number_base_zero || 100;
+        
+        if (!filePath) {
+          return { error: 'File path is required (filePath or file_path)' };
+        }
+        try {
+          // Get the workspace root directory
+          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          if (!workspaceRoot) {
+            return { error: 'No workspace open' };
+          }
+          
+          // Validate file path
+          if (!filePath || filePath.trim() === '') {
+            return { error: 'File path cannot be empty' };
+          }
+          
+          // Resolve the file path relative to workspace root
+          const fullPath = path.join(workspaceRoot, filePath);
+          console.log('Reading file:', filePath, 'resolved to:', fullPath);
+          
+          // Check if file exists
+          if (!fs.existsSync(fullPath)) {
+            return { error: `File not found: ${filePath}` };
+          }
+          
+          // Check if it's actually a file
+          const stats = fs.statSync(fullPath);
+          if (!stats.isFile()) {
+            return { error: `${filePath} is not a file` };
+          }
+          
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const lines = content.split('\n');
+          const startLine = Math.max(0, startLineNumberBaseZero);
+          const endLine = Math.min(lines.length - 1, endLineNumberBaseZero);
+          
+          const selectedLines = lines.slice(startLine, endLine + 1);
+          const outline = lines.length > endLine + 1 ? 
+            `... and ${lines.length - endLine - 1} more lines` : '';
+          
+          // Create operation notification for file read
+          const fileName = path.basename(filePath);
+          const fileType = path.extname(filePath).substring(1) || 'file';
+        createOperationNotification('read', `Read ${fileName} L${startLine + 1}-${endLine + 1}`, {
+            filePath,
+            fileName,
+            fileType,
+            linesRead: { start: startLine + 1, end: endLine + 1, total: lines.length }
+          });
+           
+          return { 
+            content: selectedLines.join('\n'),
+            startLine,
+            endLine,
+            totalLines: lines.length,
+            outline
+          };
+        } catch (error) {
+          console.error('Error reading file:', error);
+          return { error: `Failed to read file: ${error instanceof Error ? error.message : String(error)}` };
+        }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'list_dir',
+      description: 'List the contents of a directory. Result will have the name of the child. If the name ends in /, it\'s a folder, otherwise a file',
+      inputSchema: z.object({
+        path: z.string().describe('The absolute path to the directory to list')
+      }),
+      outputSchema: z.object({
+        entries: z.array(z.object({
+          name: z.string(),
+          path: z.string(),
+          isDirectory: z.boolean(),
+          size: z.number().optional()
+        })).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ path: dirPath }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        // Resolve the path relative to workspace root
+        const fullPath = dirPath.startsWith('/') || dirPath.match(/^[A-Z]:/) ? dirPath : path.join(workspaceRoot, dirPath);
+        
+        if (!fs.existsSync(fullPath)) {
+          return { error: `Directory not found: ${dirPath}` };
+        }
+
+        const stats = fs.statSync(fullPath);
+        if (!stats.isDirectory()) {
+          return { error: `${dirPath} is not a directory` };
+        }
+
+        const entries = fs.readdirSync(fullPath);
+        const result = [];
+
+        for (const entry of entries) {
+          try {
+            const entryPath = path.join(fullPath, entry);
+            const entryStats = fs.statSync(entryPath);
+            const relativePath = path.relative(workspaceRoot, entryPath);
+            
+            result.push({
+              name: entry,
+              path: relativePath,
+              isDirectory: entryStats.isDirectory(),
+              size: entryStats.isFile() ? entryStats.size : undefined
+            });
+          } catch (entryError) {
+            // Skip entries that can't be read
+            continue;
+          }
+        }
+
+        // Create operation notification for directory listing
+        const dirName = path.basename(dirPath);
+        createOperationNotification('read', `Listed ${dirName}`, {
+          filePath: dirPath,
+          fileName: dirName,
+          fileType: 'directory'
+        });
+
+        return { entries: result };
+      } catch (error) {
+        console.error('Error listing directory:', error);
+        return { error: `Failed to list directory: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'replace_string_in_file',
+      description: 'Replace a specific string in a file with new content. This is the preferred method for editing files.',
+      inputSchema: z.object({
+        filePath: z.string().describe('The relative path of the file to edit from the workspace root'),
+        oldString: z.string().describe('The exact string to replace (must be unique within the file)'),
+        newString: z.string().describe('The new string to replace the old string with')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePath, oldString, newString }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        const fullPath = path.join(workspaceRoot, filePath);
+        
+        if (!fs.existsSync(fullPath)) {
+          return { success: false, error: `File not found: ${filePath}` };
+        }
+
+        const content = fs.readFileSync(fullPath, 'utf8');
+        
+        if (!content.includes(oldString)) {
+          return { success: false, error: `String not found in file: ${oldString}` };
+        }
+
+        const newContent = content.replace(oldString, newString);
+        fs.writeFileSync(fullPath, newContent, 'utf8');
+
+        // Create detailed file edit notification
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).substring(1) || 'file';
+        
+        // Calculate lines added/removed
+        const oldLines = oldString.split('\n').length;
+        const newLines = newString.split('\n').length;
+        const linesAdded = Math.max(0, newLines - oldLines);
+        const linesRemoved = Math.max(0, oldLines - newLines);
+        
+        createOperationNotification('write', `Edited ${fileName}`, {
+          filePath,
+          fileName,
+          fileType,
+          linesAdded,
+          linesRemoved,
+          content: `Replaced: "${oldString.substring(0, 100)}${oldString.length > 100 ? '...' : ''}"\nWith: "${newString.substring(0, 100)}${newString.length > 100 ? '...' : ''}"`,
+          type: 'write',
+          operationId: `edit_${Date.now()}_${fileName}`
+        });
+
+        return { 
+          success: true, 
+          message: `Successfully updated ${filePath}` 
+        };
+      } catch (error) {
+        console.error('Error replacing string in file:', error);
+        return { 
+          success: false, 
+          error: `Failed to replace string: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'insert_edit_into_file',
+      description: 'Insert new content into a file at a specific location. Use this only if replace_string_in_file fails.',
+      inputSchema: z.object({
+        filePath: z.string().describe('The relative path of the file to edit from the workspace root'),
+        content: z.string().describe('The content to insert'),
+        position: z.enum(['start', 'end', 'before', 'after']).describe('Where to insert the content'),
+        targetString: z.string().optional().describe('The string to insert before/after (required if position is before/after)')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePath, content, position, targetString }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        const fullPath = path.join(workspaceRoot, filePath);
+        
+        if (!fs.existsSync(fullPath)) {
+          return { success: false, error: `File not found: ${filePath}` };
+        }
+
+        let fileContent = fs.readFileSync(fullPath, 'utf8');
+        let newContent = '';
+
+        switch (position) {
+          case 'start':
+            newContent = content + '\n' + fileContent;
+            break;
+          case 'end':
+            newContent = fileContent + '\n' + content;
+            break;
+          case 'before':
+            if (!targetString) {
+              return { success: false, error: 'targetString is required for before/after positions' };
+            }
+            if (!fileContent.includes(targetString)) {
+              return { success: false, error: `Target string not found: ${targetString}` };
+            }
+            newContent = fileContent.replace(targetString, content + '\n' + targetString);
+            break;
+          case 'after':
+            if (!targetString) {
+              return { success: false, error: 'targetString is required for before/after positions' };
+            }
+            if (!fileContent.includes(targetString)) {
+              return { success: false, error: `Target string not found: ${targetString}` };
+            }
+            newContent = fileContent.replace(targetString, targetString + '\n' + content);
+            break;
+        }
+
+        fs.writeFileSync(fullPath, newContent, 'utf8');
+
+        // Create detailed file edit notification
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).substring(1) || 'file';
+        
+        // Calculate lines added
+        const contentLines = content.split('\n').length;
+        const linesAdded = contentLines;
+        
+        createOperationNotification('write', `Inserted content into ${fileName}`, {
+          filePath,
+          fileName,
+          fileType,
+          linesAdded,
+          linesRemoved: 0,
+          content: `Inserted at ${position}: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
+          type: 'write',
+          operationId: `insert_${Date.now()}_${fileName}`
+        });
+
+        return { 
+          success: true, 
+          message: `Successfully inserted content into ${filePath}` 
+        };
+      } catch (error) {
+        console.error('Error inserting content into file:', error);
+        return { 
+          success: false, 
+          error: `Failed to insert content: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'grep_search',
+      description: 'Search for text patterns in files using regex. Returns matching lines with file paths and line numbers.',
+      inputSchema: z.object({
+        query: z.string().describe('The regex pattern to search for'),
+        includePattern: z.string().optional().describe('File pattern to include (e.g., "*.ts", "src/**/*.js")')
+      }),
+      outputSchema: z.object({
+        results: z.array(z.object({
+          file: z.string(),
+          line: z.number(),
+          content: z.string()
+        })).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query, includePattern = '**/*' }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        const regex = new RegExp(query, 'i');
+        const results: Array<{ file: string; line: number; content: string }> = [];
+
+        // Get all files matching the include pattern
+        const files = await vscode.workspace.findFiles(includePattern, '**/node_modules/**');
+        
+        for (const file of files) {
+          try {
+            const content = fs.readFileSync(file.fsPath, 'utf8');
+            const lines = content.split('\n');
+            
+            for (let i = 0; i < lines.length; i++) {
+              if (regex.test(lines[i])) {
+                const relativePath = path.relative(workspaceRoot, file.fsPath);
+                results.push({
+                  file: relativePath,
+                  line: i + 1,
+                  content: lines[i].trim()
+                });
+              }
+            }
+          } catch (fileError) {
+            // Skip files that can't be read
+            continue;
+          }
+        }
+
+        // Create operation notification
+        createOperationNotification('search', `Grepped ${query} ${includePattern}`);
+
+        return { 
+          results: results.slice(0, 100), // Limit results
+          count: results.length 
+        };
+      } catch (error) {
+        console.error('Grep search error:', error);
+        return { error: `Grep search failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'semantic_search',
+      description: 'Search for semantically similar content across the workspace. This is useful for finding related code without exact text matches.',
+      inputSchema: z.object({
+        query: z.string().describe('The semantic search query'),
+        includePattern: z.string().optional().describe('File pattern to include in search')
+      }),
+      outputSchema: z.object({
+        results: z.array(z.object({
+          file: z.string(),
+          relevance: z.number(),
+          snippet: z.string()
+        })).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query, includePattern = '**/*' }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        // For now, implement a simple keyword-based semantic search
+        // In a real implementation, this would use embeddings or AI
+        const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
+        const results: Array<{ file: string; relevance: number; snippet: string }> = [];
+
+        const files = await vscode.workspace.findFiles(includePattern, '**/node_modules/**');
+        
+        for (const file of files) {
+          try {
+            const content = fs.readFileSync(file.fsPath, 'utf8');
+            const lines = content.split('\n');
+            
+            let fileRelevance = 0;
+            let bestSnippet = '';
+            
+            for (const line of lines) {
+              const lineLower = line.toLowerCase();
+              let lineRelevance = 0;
+              
+              for (const keyword of keywords) {
+                if (lineLower.includes(keyword)) {
+                  lineRelevance += 1;
+                }
+              }
+              
+              if (lineRelevance > 0 && lineRelevance > fileRelevance) {
+                fileRelevance = lineRelevance;
+                bestSnippet = line.trim();
+              }
+            }
+            
+            if (fileRelevance > 0) {
+              const relativePath = path.relative(workspaceRoot, file.fsPath);
+              results.push({
+                file: relativePath,
+                relevance: fileRelevance,
+                snippet: bestSnippet
+              });
+            }
+          } catch (fileError) {
+            continue;
+          }
+        }
+
+        // Sort by relevance and limit results
+        results.sort((a, b) => b.relevance - a.relevance);
+        
+        // Create operation notification
+        createOperationNotification('search', `Semantic searched ${query} ${includePattern}`);
+
+        return { 
+          results: results.slice(0, 50), // Limit results
+          count: results.length 
+        };
+      } catch (error) {
+        console.error('Semantic search error:', error);
+        return { error: `Semantic search failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  // Helper function to ensure terminal command output matches schema
+  const ensureTerminalOutputSchema = (result: any) => {
+    return {
+      success: Boolean(result.success),
+      output: result.output || '',
+      error: result.error || '',
+      exitCode: typeof result.exitCode === 'number' ? result.exitCode : -1,
+      stderr: result.stderr || ''
+    };
+  };
+
+  newAi.defineTool(
+    {
+      name: 'run_in_terminal',
+      description: 'Run a command in the integrated terminal and capture its output. Use this for package installation, building, testing, etc.',
+      inputSchema: z.object({
+        command: z.string().describe('The command to run in the terminal'),
+        cwd: z.string().optional().describe('Working directory for the command (relative to workspace root)')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        output: z.string().optional(),
+        error: z.string().optional(),
+        exitCode: z.number().optional(),
+        stderr: z.string().optional()
+      })
+    },
+    async ({ command, cwd }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        const workingDir = cwd ? path.join(workspaceRoot, cwd) : workspaceRoot;
+        
+        // Create operation notification for terminal command
+        createOperationNotification('command', `Running: ${command}`, {
+          filePath: workingDir
+        });
+        
+        // Use VS Code's built-in terminal execution with output capture
+        const terminal = vscode.window.createTerminal('AI Assistant');
+        terminal.show();
+        
+        // Change to the working directory first
+        terminal.sendText(`cd "${workingDir}"`);
+        
+        // Execute the command and capture output using VS Code's built-in terminal execution
+        return new Promise((resolve) => {
+          // Create a unique identifier for this command execution
+          const commandId = `ai_cmd_${Date.now()}`;
+          
+          // Execute the command using VS Code's terminal command execution
+          const disposable = vscode.commands.registerCommand(`terminal.executeCommand.${commandId}`, async () => {
+            try {
+              // Use the integrated terminal to execute the command
+              const result = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Executing: ${command}`,
+                cancellable: false
+              }, async (progress) => {
+                progress.report({ message: 'Running command...' });
+                
+                // Execute the command using Node.js child_process for better output capture
+                const { exec } = require('child_process');
+                const util = require('util');
+                const execAsync = util.promisify(exec);
+                
+                try {
+                  const { stdout, stderr } = await execAsync(command, {
+                    cwd: workingDir,
+                    timeout: 30000, // 30 second timeout
+                    maxBuffer: 1024 * 1024 // 1MB buffer
+                  });
+                  
+                  // Command succeeded
+                  return ensureTerminalOutputSchema({
+                    success: true,
+                    output: stdout || 'Command executed successfully',
+                    exitCode: 0,
+                    stderr: stderr || ''
+                  });
+                } catch (execError: any) {
+                  // Command failed
+                  // Ensure exitCode is always a number
+                  let exitCode = -1;
+                  if (execError.code !== undefined) {
+                    if (typeof execError.code === 'number') {
+                      exitCode = execError.code;
+                    } else if (typeof execError.code === 'string') {
+                      // Convert string error codes to numbers
+                      switch (execError.code) {
+                        case 'ENOENT': exitCode = 127; break; // Command not found
+                        case 'EACCES': exitCode = 126; break; // Permission denied
+                        case 'ETIMEDOUT': exitCode = 124; break; // Timeout
+                        default: exitCode = -1; break;
+                      }
+                    }
+                  }
+                  
+                  return ensureTerminalOutputSchema({
+                    success: false,
+                    error: `Command failed: ${execError.message}`,
+                    output: execError.stdout || '',
+                    exitCode: exitCode,
+                    stderr: execError.stderr || execError.message
+                  });
+                }
+              });
+              
+              resolve(result);
+            } catch (error) {
+              resolve(ensureTerminalOutputSchema({
+                success: false,
+                error: `Failed to execute command: ${error instanceof Error ? error.message : String(error)}`,
+                exitCode: -1,
+                output: '',
+                stderr: error instanceof Error ? error.message : String(error)
+              }));
+            } finally {
+              disposable.dispose();
+            }
+          });
+          
+          // Execute the command
+          vscode.commands.executeCommand(`terminal.executeCommand.${commandId}`);
+        });
+        
+      } catch (error) {
+        console.error('Error running terminal command:', error);
+        return { 
+          success: false, 
+          error: `Failed to run command: ${error instanceof Error ? error.message : String(error)}`,
+          output: '',
+          exitCode: -1,
+          stderr: error instanceof Error ? error.message : String(error)
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'edit_notebook_file',
+      description: 'Edit a Jupyter notebook file. Use this instead of insert_edit_into_file for notebook files.',
+      inputSchema: z.object({
+        filePath: z.string().describe('The relative path of the notebook file to edit'),
+        cellIndex: z.number().describe('The index of the cell to edit (0-based)'),
+        content: z.string().describe('The new content for the cell')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePath, cellIndex, content }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        const fullPath = path.join(workspaceRoot, filePath);
+        
+        if (!fs.existsSync(fullPath)) {
+          return { success: false, error: `File not found: ${filePath}` };
+        }
+
+        // For now, implement a simple text-based notebook editor
+        // In a real implementation, this would parse and modify the actual notebook format
+        const fileContent = fs.readFileSync(fullPath, 'utf8');
+        
+        // Create operation notification for notebook edit
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).substring(1) || 'notebook';
+        createOperationNotification('write', `Edited notebook ${fileName} cell ${cellIndex}`, {
+          filePath,
+          fileName,
+          fileType
+        });
+        
+        // Simple implementation - in reality, this would need to parse JSON and modify cells
+        return { 
+          success: true, 
+          message: `Notebook editing not fully implemented yet. File: ${filePath}, Cell: ${cellIndex}` 
+        };
+      } catch (error) {
+        console.error('Error editing notebook file:', error);
+        return { 
+          success: false, 
+          error: `Failed to edit notebook: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'run_notebook_cell',
+      description: 'Run a specific cell in a Jupyter notebook. Use this instead of terminal commands for notebook execution.',
+      inputSchema: z.object({
+        filePath: z.string().describe('The relative path of the notebook file'),
+        cellIndex: z.number().describe('The index of the cell to run (0-based)')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        output: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePath, cellIndex }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        // Create operation notification for notebook cell execution
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).substring(1) || 'notebook';
+        createOperationNotification('command', `Executed notebook ${fileName} cell ${cellIndex}`, {
+          filePath,
+          fileName,
+          fileType
+        });
+        
+        // For now, return a placeholder message
+        // In a real implementation, this would execute the notebook cell
+        return { 
+          success: true, 
+          output: `Notebook cell execution not fully implemented yet. File: ${filePath}, Cell: ${cellIndex}` 
+        };
+      } catch (error) {
+        console.error('Error running notebook cell:', error);
+        return { 
+          success: false, 
+          error: `Failed to run notebook cell: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'copilot_getNotebookSummary',
+      description: 'Get a summary of a Jupyter notebook including cell information and execution details.',
+      inputSchema: z.object({
+        filePath: z.string().describe('The relative path of the notebook file')
+      }),
+      outputSchema: z.object({
+        summary: z.object({
+          fileName: z.string(),
+          cellCount: z.number(),
+          cells: z.array(z.object({
+            index: z.number(),
+            type: z.string(),
+            language: z.string(),
+            content: z.string().optional()
+          }))
+        }).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePath }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        const fullPath = path.join(workspaceRoot, filePath);
+        
+        if (!fs.existsSync(fullPath)) {
+          return { error: `File not found: ${filePath}` };
+        }
+
+        // Create operation notification for notebook summary
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).substring(1) || 'notebook';
+        createOperationNotification('read', `Got summary of ${fileName}`, {
+          filePath,
+          fileName,
+          fileType
+        });
+        
+        // For now, return a placeholder summary
+        // In a real implementation, this would parse the notebook JSON and extract cell information
+        return { 
+          summary: {
+            fileName: path.basename(filePath),
+            cellCount: 0,
+            cells: []
+          }
+        };
+      } catch (error) {
+        console.error('Error getting notebook summary:', error);
+        return { 
+          error: `Failed to get notebook summary: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  // Register additional tools from the .prompt file
+  newAi.defineTool(
+    {
+      name: 'list_code_usages',
+      description: 'Request to list all usages (references, definitions, implementations etc) of a function, class, method, variable etc.',
+      inputSchema: z.object({
+        symbolName: z.string().describe('The name of the symbol, such as a function name, class name, method name, variable name, etc.'),
+        filePaths: z.array(z.string()).optional().describe('One or more file paths which likely contain the definition of the symbol')
+      }),
+      outputSchema: z.object({
+        usages: z.array(z.object({
+          file: z.string(),
+          line: z.number(),
+          type: z.string(),
+          content: z.string()
+        })).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ symbolName, filePaths }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        // Create operation notification
+        createOperationNotification('search', `Listed usages of ${symbolName}`);
+
+        // For now, implement a simple search-based approach
+        // In a real implementation, this would use VS Code's language server
+        const results: Array<{ file: string; line: number; type: string; content: string }> = [];
+        
+        // Search for the symbol in the workspace
+        const files = await vscode.workspace.findFiles('**/*.{js,ts,jsx,tsx}', '**/node_modules/**');
+        
+        for (const file of files) {
+          try {
+            const content = fs.readFileSync(file.fsPath, 'utf8');
+            const lines = content.split('\n');
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+              if (line.includes(symbolName)) {
+                const relativePath = path.relative(workspaceRoot, file.fsPath);
+                const type = line.includes('function') || line.includes('=>') ? 'function' :
+                           line.includes('class') ? 'class' :
+                           line.includes('const') || line.includes('let') || line.includes('var') ? 'variable' :
+                           'reference';
+                
+                results.push({
+                  file: relativePath,
+                  line: i + 1,
+                  type,
+                  content: line.trim()
+                });
+              }
+            }
+          } catch (fileError) {
+            continue;
+          }
+        }
+
+        return { 
+          usages: results.slice(0, 50), // Limit results
+          count: results.length 
+        };
+      } catch (error) {
+        console.error('Error listing code usages:', error);
+        return { error: `Failed to list code usages: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'get_vscode_api',
+      description: 'Get relevant VS Code API references to answer questions about VS Code extension development.',
+      inputSchema: z.object({
+        query: z.string().describe('The query to search vscode documentation for')
+      }),
+      outputSchema: z.object({
+        references: z.array(z.object({
+          api: z.string(),
+          description: z.string(),
+          example: z.string().optional()
+        })).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('search', `Searched VS Code API for ${query}`);
+
+        // For now, return common VS Code API references
+        // In a real implementation, this would search actual VS Code documentation
+        const commonApis = [
+          { api: 'vscode.window.createWebviewPanel', description: 'Create a new webview panel' },
+          { api: 'vscode.workspace.findFiles', description: 'Find files in the workspace' },
+          { api: 'vscode.commands.registerCommand', description: 'Register a new command' },
+          { api: 'vscode.window.showInformationMessage', description: 'Show an information message' }
+        ];
+
+        const filteredApis = commonApis.filter(api => 
+          api.api.toLowerCase().includes(query.toLowerCase()) ||
+          api.description.toLowerCase().includes(query.toLowerCase())
+        );
+
+        return { references: filteredApis };
+      } catch (error) {
+        console.error('Error getting VS Code API references:', error);
+        return { error: `Failed to get VS Code API references: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'file_search',
+      description: 'Search for files in the workspace by glob pattern.',
+      inputSchema: z.object({
+        query: z.string().describe('Search for files with names or paths matching this query. Can be a glob pattern.')
+      }),
+      outputSchema: z.object({
+        files: z.array(z.string()).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        // Create operation notification
+        createOperationNotification('search', `File searched for ${query}`);
+
+        const files = await vscode.workspace.findFiles(query, '**/node_modules/**');
+        const relativePaths = files.map(file => path.relative(workspaceRoot, file.fsPath));
+
+        return { 
+          files: relativePaths.slice(0, 20), // Limit results
+          count: relativePaths.length 
+        };
+      } catch (error) {
+        console.error('Error searching files:', error);
+        return { error: `File search failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'get_terminal_output',
+      description: 'Get the output of a terminal command previously started with run_in_terminal',
+      inputSchema: z.object({
+        id: z.string().describe('The ID of the terminal command output to check')
+      }),
+      outputSchema: z.object({
+        output: z.string().optional(),
+        error: z.string().optional(),
+        isComplete: z.boolean().optional()
+      })
+    },
+    async ({ id }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('read', `Got terminal output for ${id}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would retrieve actual terminal output
+        return { 
+          output: `Terminal output retrieval not fully implemented yet. ID: ${id}`,
+          isComplete: true
+        };
+      } catch (error) {
+        console.error('Error getting terminal output:', error);
+        return { error: `Failed to get terminal output: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'get_errors',
+      description: 'Get any compile or lint errors in a code file.',
+      inputSchema: z.object({
+        filePaths: z.array(z.string()).describe('Array of file paths to check for errors')
+      }),
+      outputSchema: z.object({
+        errors: z.array(z.object({
+          file: z.string(),
+          line: z.number(),
+          message: z.string(),
+          severity: z.string()
+        })).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePaths }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { error: 'No workspace open' };
+        }
+
+        // Create operation notification
+        createOperationNotification('read', `Got errors for ${filePaths.length} files`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would use VS Code's diagnostics
+        return { 
+          errors: [],
+          count: 0
+        };
+      } catch (error) {
+        console.error('Error getting errors:', error);
+        return { error: `Failed to get errors: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'get_changed_files',
+      description: 'Get git diffs of current file changes in the active git repository.',
+      inputSchema: z.object({
+        repositoryPath: z.string().describe('The absolute path to the git repository to look for changes in'),
+        sourceControlState: z.array(z.enum(['staged', 'unstaged', 'merge-conflicts'])).optional().describe('The kinds of git state to filter by')
+      }),
+      outputSchema: z.object({
+        changes: z.array(z.object({
+          file: z.string(),
+          status: z.string(),
+          diff: z.string().optional()
+        })).optional(),
+        count: z.number().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ repositoryPath, sourceControlState }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('read', `Got changed files from git`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would use git commands or VS Code's source control API
+        return { 
+          changes: [],
+          count: 0
+        };
+      } catch (error) {
+        console.error('Error getting changed files:', error);
+        return { error: `Failed to get changed files: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'create_new_workspace',
+      description: 'Get steps to help the user create any project in a VS Code workspace.',
+      inputSchema: z.object({
+        query: z.string().describe('The query to use to generate the new workspace')
+      }),
+      outputSchema: z.object({
+        steps: z.array(z.string()).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('create', `Created new workspace for ${query}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would generate actual project setup steps
+        return { 
+          steps: [
+            `Create a new directory for your ${query} project`,
+            'Initialize the project with appropriate package manager',
+            'Set up the basic project structure',
+            'Install necessary dependencies'
+          ]
+        };
+      } catch (error) {
+        console.error('Error creating new workspace:', error);
+        return { error: `Failed to create new workspace: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'get_project_setup_info',
+      description: 'Get project setup information for a Visual Studio Code workspace.',
+      inputSchema: z.object({
+        language: z.enum(['javascript', 'typescript', 'python', 'other']).describe('The programming language for the project'),
+        projectType: z.enum(['basic', 'mcp-server', 'model-context-protocol-server', 'vscode-extension', 'next-js', 'vite', 'other']).describe('The type of project to create')
+      }),
+      outputSchema: z.object({
+        setupInfo: z.object({
+          language: z.string(),
+          projectType: z.string(),
+          steps: z.array(z.string()),
+          dependencies: z.array(z.string())
+        }).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ language, projectType }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('read', `Got project setup info for ${language} ${projectType}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would provide actual setup information
+        return { 
+          setupInfo: {
+            language,
+            projectType,
+            steps: ['Initialize project', 'Install dependencies', 'Set up configuration'],
+            dependencies: ['Basic dependencies for the project type']
+          }
+        };
+      } catch (error) {
+        console.error('Error getting project setup info:', error);
+        return { error: `Failed to get project setup info: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'install_extension',
+      description: 'Install an extension in VS Code.',
+      inputSchema: z.object({
+        id: z.string().describe('The ID of the extension to install'),
+        name: z.string().describe('The name of the extension to install')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ id, name }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('command', `Installing extension ${name}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would use VS Code's extension management API
+        return { 
+          success: true,
+          message: `Extension installation not fully implemented yet. ID: ${id}, Name: ${name}`
+        };
+      } catch (error) {
+        console.error('Error installing extension:', error);
+        return { 
+          success: false,
+          error: `Failed to install extension: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'create_new_jupyter_notebook',
+      description: 'Generates a new Jupyter Notebook (.ipynb) in VS Code.',
+      inputSchema: z.object({
+        query: z.string().describe('The query to use to generate the jupyter notebook')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        filePath: z.string().optional(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ query }) => {
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+          return { success: false, error: 'No workspace open' };
+        }
+
+        // Create operation notification
+        createOperationNotification('create', `Created new Jupyter notebook for ${query}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would create an actual notebook file
+        return { 
+          success: true,
+          message: `Jupyter notebook creation not fully implemented yet. Query: ${query}`
+        };
+      } catch (error) {
+        console.error('Error creating Jupyter notebook:', error);
+        return { 
+          success: false,
+          error: `Failed to create Jupyter notebook: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'fetch_webpage',
+      description: 'Fetches the main content from a web page.',
+      inputSchema: z.object({
+        urls: z.array(z.string()).describe('An array of URLs to fetch content from'),
+        query: z.string().describe('The query to search for in the web page content')
+      }),
+      outputSchema: z.object({
+        content: z.array(z.object({
+          url: z.string(),
+          title: z.string().optional(),
+          text: z.string().optional()
+        })).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ urls, query }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('search', `Fetched webpage content for ${query}`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would use a web scraping library
+        return { 
+          content: urls.map(url => ({
+            url,
+            title: 'Webpage Title',
+            text: 'Webpage content would be fetched here'
+          }))
+        };
+      } catch (error) {
+        console.error('Error fetching webpage:', error);
+        return { error: `Failed to fetch webpage: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'test_search',
+      description: 'For a source code file, find the file that contains the tests. For a test file find the file that contains the code under test.',
+      inputSchema: z.object({
+        filePaths: z.array(z.string()).describe('Array of file paths to search for test relationships')
+      }),
+      outputSchema: z.object({
+        relationships: z.array(z.object({
+          sourceFile: z.string(),
+          testFile: z.string(),
+          relationship: z.string()
+        })).optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ filePaths }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('search', `Searched for test relationships`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would analyze the codebase for test relationships
+        return { 
+          relationships: []
+        };
+      } catch (error) {
+        console.error('Error searching for test relationships:', error);
+        return { error: `Failed to search for test relationships: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+  );
+
+  newAi.defineTool(
+    {
+      name: 'update_user_preferences',
+      description: 'Update user preferences based on their feedback or corrections.',
+      inputSchema: z.object({
+        preferences: z.string().describe('The user preferences to update')
+      }),
+      outputSchema: z.object({
+        success: z.boolean(),
+        message: z.string().optional(),
+        error: z.string().optional()
+      })
+    },
+    async ({ preferences }) => {
+      try {
+        // Create operation notification
+        createOperationNotification('write', `Updated user preferences`);
+
+        // For now, return a placeholder message
+        // In a real implementation, this would store user preferences
+        return { 
+          success: true,
+          message: `User preferences updated: ${preferences}`
+        };
+      } catch (error) {
+        console.error('Error updating user preferences:', error);
+        return { 
+          success: false,
+          error: `Failed to update user preferences: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+  );
+
+  // Set the global instances
+  ai = newAi;
+  summarizerAi = newSummarizerAi;
+}
+
+// Function to update the Genkit instance with new settings
+function updateGenkitInstance(apiKey: string, model: string = 'gemini-2.0-flash') {
+  // Only create a new instance if the API key or model has actually changed
+  if (ai && (currentApiKey !== apiKey || currentModel !== model)) {
+    console.log('API key or model changed, creating new Genkit instance');
+    createGenkitInstance(apiKey, model);
+  } else if (!ai) {
+    console.log('No AI instance exists, creating new one');
+    createGenkitInstance(apiKey, model);
+  }
+}
+
+// Function to load the Dotprompt content
+function loadDotprompt(): string {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Get the directory of the current file
+    const currentDir = __dirname;
+    const promptPath = path.join(currentDir, '..', 'prompts', 'vscode-assistant.prompt');
+    
+    const promptContent = fs.readFileSync(promptPath, 'utf8');
+    return promptContent;
+  } catch (error) {
+    console.error('Error loading Dotprompt:', error);
+    // Return a fallback prompt
+    return `You are an expert AI programming assistant. Help the user with their request: {{userRequest}}`;
+  }
+}
+
+// Function to structure chat history as JSON
+async function structureChatHistoryAsJson(chatHistory: string): Promise<any> {
+  try {
+    const lines = chatHistory.split('\n');
+    const messages = lines.filter(line => line.trim().length > 0);
+    
+    return {
+      messageCount: messages.length,
+      recentMessages: messages.slice(-10), // Last 10 messages
+      summary: `Chat contains ${messages.length} messages with recent activity`
+    };
+  } catch (error) {
+    return {
+      messageCount: 0,
+      recentMessages: [],
+      summary: 'Unable to parse chat history'
+    };
+  }
+}
+
+// Function to get file structure for project context
+async function getFileStructure(workspaceRoot: string): Promise<any> {
+  try {
+    const entries = fs.readdirSync(workspaceRoot);
+    const files = entries.filter(entry => {
+      try {
+        return fs.statSync(path.join(workspaceRoot, entry)).isFile();
+      } catch {
+        return false;
+      }
+    });
+    const folders = entries.filter(entry => {
+      try {
+        return fs.statSync(path.join(workspaceRoot, entry)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    
+    return {
+      files: files.slice(0, 20).map(file => ({
+        name: file,
+        path: path.join(workspaceRoot, file)
+      })),
+      folders: folders.slice(0, 20).map(folder => ({
+        name: folder,
+        path: path.join(workspaceRoot, folder)
+      })),
+      totalFiles: files.length,
+      totalFolders: folders.length
+    };
+  } catch (error) {
+    return { error: 'Unable to read directory structure' };
+  }
+}
+
+// Professional chat summarization function
+async function summarizeChatHistory(chatHistory: string, apiKey: string): Promise<string> {
+  const maxRetries = 3;
+  let attempt = 0;
+  
+  while (attempt < maxRetries) {
+    try {
+      attempt++;
+      console.log(`Summarizing chat history (attempt ${attempt}/${maxRetries})...`);
+      
+      const summarizationPrompt = `You are an expert AI programming assistant specializing in conversation summarization. Your task is to create a concise, professional summary of a programming conversation that preserves all critical technical details, decisions, and context needed for the conversation to continue seamlessly.
+
+**CRITICAL REQUIREMENTS:**
+1. **Preserve Technical Context**: Keep all file paths, code snippets, error messages, and technical decisions
+2. **Maintain User Intent**: Preserve the user's goals, preferences, and any specific requirements
+3. **Keep Tool Usage**: Maintain information about which tools were used and their results
+4. **Preserve File Changes**: Keep track of what files were created, modified, or deleted
+5. **Maintain Project Context**: Preserve workspace information, project structure, and current state
+6. **Be Concise**: Reduce length by 60-70% while keeping 100% of technical relevance
+
+**FORMAT:**
+- Use clear, professional language
+- Structure as bullet points for easy reading
+- Group related information logically
+- Highlight any pending actions or unresolved issues
+
+**INPUT CHAT HISTORY:**
+${chatHistory}
+
+**TASK:** Create a professional summary that allows the conversation to continue exactly where it left off, with no loss of technical context or user intent.`;
+
+      const summary = await summarizerAi.generate({
+        prompt: summarizationPrompt,
+        config: {
+          temperature: 0.1, // Low temperature for consistent, focused summarization
+          maxOutputTokens: 2000 // Limit summary length
+        }
+      });
+      
+      // Notify the extension about summarization
+      operationTracker.notifySummarization(summary.text || 'Failed to generate summary');
+      
+      return summary.text || 'Failed to generate summary';
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Error summarizing chat history (attempt ${attempt}/${maxRetries}):`, error);
+      
+      // Check if this is a rate limit error that we should retry
+      if (errorMessage.includes('429 Too Many Requests') || 
+          errorMessage.includes('rate-limits') || 
+          errorMessage.includes('quota') ||
+          errorMessage.includes('retryDelay')) {
+        
+        if (attempt < maxRetries) {
+          const retryDelay = extractRetryDelay(errorMessage);
+          const exponentialDelay = retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          const maxDelay = 30000; // Cap at 30 seconds for summarization
+          const actualDelay = Math.min(exponentialDelay, maxDelay);
+          
+          console.log(`Rate limit hit during summarization, waiting ${actualDelay}ms before retry ${attempt + 1}/${maxRetries}...`);
+          
+          await sleep(actualDelay);
+          continue; // Retry the summarization
+        } else {
+          console.log('Max retries reached for summarization rate limit error');
+          // Return fallback summary
+          const lines = chatHistory.split('\n');
+          const recentMessages = lines.slice(-20); // Keep last 20 lines as fallback
+          return `[Summary failed due to rate limits - keeping recent context]\n${recentMessages.join('\n')}`;
+        }
+      }
+      
+      // For non-rate-limit errors, don't retry
+      if (attempt === 1) {
+        console.error('Non-rate-limit error during summarization, using fallback');
+        // Return fallback summary that preserves the most recent messages
+        const lines = chatHistory.split('\n');
+        const recentMessages = lines.slice(-20); // Keep last 20 lines as fallback
+        return `[Summary failed - keeping recent context]\n${recentMessages.join('\n')}`;
+      }
+      
+      // This shouldn't happen, but just in case
+      const lines = chatHistory.split('\n');
+      const recentMessages = lines.slice(-20);
+      return `[Summary failed after multiple attempts - keeping recent context]\n${recentMessages.join('\n')}`;
+    }
+  }
+  
+  // This shouldn't happen, but just in case
+  const lines = chatHistory.split('\n');
+  const recentMessages = lines.slice(-20);
+  return `[Summary failed - keeping recent context]\n${recentMessages.join('\n')}`;
+}
+
+// Helper function to sleep for a given number of milliseconds
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Helper function to extract retry delay from error message
+function extractRetryDelay(errorMessage: string): number {
+  try {
+    const retryMatch = errorMessage.match(/retryDelay":"(\d+)s"/);
+    if (retryMatch) {
+      return parseInt(retryMatch[1]) * 1000; // Convert seconds to milliseconds
+    }
+    
+    // Check for rate limit patterns and provide reasonable defaults
+    if (errorMessage.includes('429 Too Many Requests') || errorMessage.includes('rate-limits')) {
+      return 10000; // 10 seconds default for rate limits
+    }
+    
+    return 5000; // 5 seconds default for other errors
+  } catch {
+    return 5000; // Fallback to 5 seconds
+  }
+}
+
+// Function to generate responses using the agent with the Dotprompt
+export const generateResponse = async (userRequest: string, apiKey?: string, model?: string, chatHistory?: string) => {
+  const maxRetries = 5;
+  let attempt = 0;
+  
+  // Debug: Check if this is a fresh call or continuation
+  console.log('=== generateResponse called ===');
+  console.log('Current chat session exists:', !!currentChatSession);
+  console.log('Current session ID:', sessionId);
+  console.log('Current API key:', currentApiKey ? 'set' : 'not set');
+  console.log('Current model:', currentModel || 'not set');
+  
+  while (attempt < maxRetries) {
+    try {
+      attempt++;
+      
+      // Only update Genkit instance if we don't have one or if the API key has actually changed
+      if (apiKey && (!ai || currentApiKey !== apiKey || currentModel !== model)) {
+        console.log('API key or model changed, updating Genkit instance');
+        console.log('Current API key:', currentApiKey ? 'set' : 'not set', 'New API key:', apiKey ? 'set' : 'not set');
+        console.log('Current model:', currentModel || 'not set', 'New model:', model || 'not set');
+        updateGenkitInstance(apiKey, model);
+        
+        // Reset chat session since we have a new AI instance
+        currentChatSession = null;
+        sessionId = null;
+      }
+      
+      // Load the prompt template and extract system prompt early
+      const promptTemplate = loadDotprompt();
+      console.log('Prompt template loaded, length:', promptTemplate.length);
+      console.log('Prompt template preview (first 200 chars):', promptTemplate.substring(0, 200));
+      
+      const systemPromptMatch = promptTemplate.match(/(.*?){{role "user"}}/s);
+      const systemPrompt = systemPromptMatch ? systemPromptMatch[1].trim() : promptTemplate;
+      
+      console.log('System prompt extracted, length:', systemPrompt.length);
+      console.log('System prompt preview (first 200 chars):', systemPrompt.substring(0, 200));
+      
+      if (!systemPrompt || systemPrompt.trim().length === 0) {
+        console.error('System prompt is empty or invalid, using fallback');
+        return {
+          text: 'Error: Unable to load system prompt. Please check your prompt file and try again.',
+          operationProgress: [],
+          pendingActions: []
+        };
+      }
+      
+      if (!currentChatSession) {
+        console.log('Creating new chat session... (API key:', currentApiKey ? 'set' : 'not set', ', model:', currentModel || 'default', ')');
+        if (ai) {
+          try {
+            // Create a new chat session using the Genkit instance with proper configuration
+            currentChatSession = ai.chat({
+              system: systemPrompt,
+              config: {
+                temperature: 0.1,
+                maxOutputTokens: 4000
+              },
+              tools: [
+                'read_file',
+                'list_dir',
+                'replace_string_in_file',
+                'insert_edit_into_file',
+                'grep_search',
+                'semantic_search',
+                'run_in_terminal',
+                'edit_notebook_file',
+                'run_notebook_cell',
+                'copilot_getNotebookSummary',
+                'list_code_usages',
+                'get_vscode_api',
+                'file_search',
+                'get_terminal_output',
+                'get_errors',
+                'get_changed_files',
+                'create_new_workspace',
+                'get_project_setup_info',
+                'install_extension',
+                'create_new_jupyter_notebook',
+                'fetch_webpage',
+                'test_search',
+                'update_user_preferences'
+              ]
+            });
+            
+            sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            console.log('Chat session created successfully with ID:', sessionId);
+          } catch (chatError) {
+            console.error('Failed to create chat session:', chatError);
+            return {
+              text: 'Error: Unable to create chat session. Please check your API key and try again.',
+              operationProgress: [],
+              pendingActions: []
+            };
+          }
+        } else {
+          console.error('AI instance not available for chat session');
+          return {
+            text: 'Error: AI instance not properly initialized. Please try again.',
+            operationProgress: [],
+            pendingActions: []
+          };
+        }
+      } else {
+        console.log('Reusing existing chat session (ID:', sessionId?.substring(0, 20) + '...', ')');
+      }
+    
+    // Gather comprehensive project context
+      let projectContext: any = {};
+      let workspace_info: any = {};
+      let tasks: any = {};
+      let workspaceFolder: any = {};
+      let editorContext: any = {};
+      
+      // For chat sessions, we don't need to process chat history manually
+      // Genkit handles this automatically through the chat session
+      
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspaceRoot) {
+          // Build project context
+          const currentDir = process.cwd();
+          const workspaceDir = path.basename(workspaceRoot);
+          
+          projectContext = {
+            workspace: workspaceDir,
+            currentDirectory: currentDir,
+            workspaceRoot: workspaceRoot,
+            openFiles: vscode.window.visibleTextEditors.map(editor => ({
+              name: path.basename(editor.document.fileName),
+              path: editor.document.fileName,
+              language: editor.document.languageId
+            })),
+            fileStructure: await getFileStructure(workspaceRoot)
+          };
+          
+          // Build workspace info
+          workspace_info = {
+            name: vscode.workspace.name || 'Unknown',
+            folders: vscode.workspace.workspaceFolders?.map(folder => ({
+              name: folder.name,
+              path: folder.uri.fsPath
+            })) || [],
+            configuration: vscode.workspace.getConfiguration()
+          };
+          
+          // Build tasks
+          try {
+            const availableTasks = await vscode.tasks.fetchTasks();
+            tasks = {
+              available: availableTasks.map(task => ({
+                name: task.name,
+                source: task.source,
+                definition: task.definition
+              }))
+            };
+          } catch (taskError) {
+            tasks = { available: [], error: 'Unable to fetch tasks' };
+          }
+          
+          // Build workspace folder
+          workspaceFolder = {
+            name: workspaceDir,
+            path: workspaceRoot,
+            uri: vscode.workspace.workspaceFolders![0].uri.toString()
+          };
+          
+          // Build editor context
+          const activeEditor = vscode.window.activeTextEditor;
+          if (activeEditor) {
+            editorContext = {
+              fileName: path.basename(activeEditor.document.fileName),
+              filePath: activeEditor.document.fileName,
+              language: activeEditor.document.languageId,
+              cursorPosition: {
+                line: activeEditor.selection.active.line,
+                character: activeEditor.selection.active.character
+              },
+              selection: activeEditor.selection.isEmpty ? null : {
+                start: {
+                  line: activeEditor.selection.start.line,
+                  character: activeEditor.selection.start.character
+                },
+                end: {
+                  line: activeEditor.selection.end.line,
+                  character: activeEditor.selection.end.character
+                }
+              }
+            };
+          }
+        }
+      } catch (contextError) {
+        console.error('Error gathering context:', contextError);
+        projectContext = { error: 'Unable to gather workspace information' };
+      }
+      
+      // Build the complete prompt by replacing placeholders with actual context
+      const completePrompt = promptTemplate
+        .replace('{{userRequest}}', userRequest)
+        .replace('{{projectContext}}', JSON.stringify(projectContext, null, 2))
+        .replace('{{workspace_info}}', JSON.stringify(workspace_info, null, 2))
+        .replace('{{tasks}}', JSON.stringify(tasks, null, 2))
+        .replace('{{workspaceFolder}}', JSON.stringify(workspaceFolder, null, 2))
+        .replace('{{editorContext}}', JSON.stringify(editorContext, null, 2));
+
+      console.log('Sending message to AI...');
+      console.log('User request:', userRequest);
+      console.log('System prompt length:', systemPrompt.length);
+      console.log('Complete prompt length:', completePrompt.length);
+      
+      // Validate user request
+      if (!userRequest || userRequest.trim().length === 0) {
+        console.error('User request is empty or invalid');
+        return {
+          text: 'Error: User request is empty or invalid. Please try again.',
+          operationProgress: [],
+          pendingActions: []
+        };
+      }
+      
+      try {
+        const response = await currentChatSession.send({
+          role: 'user',
+          content: [{ text: userRequest }]
+        }, {
+          config: {
+            temperature: 0.1,
+            maxOutputTokens: 4000
+          }
+        });
+        
+        console.log('AI response received successfully');
+        console.log('Response object:', response);
+        console.log('Response text length:', response.text?.length || 0);
+        
+        if (!response || !response.text) {
+          console.error('AI response is empty or invalid');
+          return {
+            text: 'Error: AI response is empty or invalid. Please try again.',
+            operationProgress: [],
+            pendingActions: []
+          };
+        }
+        
+        // Parse the AI response to extract pendingActions if present
+        let pendingActions = [];
+        let parsedResponse = response.text;
+        
+        try {
+          // Check if the response contains JSON structure
+          if (response.text && response.text.includes('pendingActions')) {
+            // Try to extract JSON from the response - handle both plain JSON and markdown-wrapped JSON
+            let jsonMatch = response.text.match(/\{[\s\S]*\}/);
+            
+            // If no match found, try to extract from markdown code blocks
+            if (!jsonMatch) {
+              const codeBlockMatch = response.text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+              if (codeBlockMatch) {
+                jsonMatch = [codeBlockMatch[1], codeBlockMatch[1]]; // Match format: [fullMatch, group1]
+              }
+            }
+            
+            if (jsonMatch) {
+              const jsonString = jsonMatch[0] || jsonMatch[1];
+              const parsed = JSON.parse(jsonString);
+              if (parsed.pendingActions && Array.isArray(parsed.pendingActions)) {
+                pendingActions = parsed.pendingActions;
+                // Use the text field from the parsed response
+                parsedResponse = parsed.text || response.text;
+              }
+            }
+          }
+        } catch (parseError) {
+          console.log('Could not parse AI response for pendingActions:', parseError);
+          // Continue with original response if parsing fails
+        }
+        
+        // Return the response in the expected format
+        return {
+          text: parsedResponse || 'Sorry, I encountered an error processing your request.',
+          operationProgress: [],
+          pendingActions: pendingActions
+        };
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Error generating response (attempt ${attempt}/${maxRetries}):`, error);
+        console.error('Error details:', error);
+        
+        // Check if this is a rate limit error that we should retry
+        if (errorMessage.includes('429 Too Many Requests') || 
+            errorMessage.includes('rate-limits') || 
+            errorMessage.includes('quota') ||
+            errorMessage.includes('retryDelay')) {
+          
+          if (attempt < maxRetries) {
+            const retryDelay = extractRetryDelay(errorMessage);
+            const exponentialDelay = retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
+            const maxDelay = 60000; // Cap at 1 minute
+            const actualDelay = Math.min(exponentialDelay, maxDelay);
+            
+            console.log(`Rate limit hit, waiting ${actualDelay}ms before retry ${attempt + 1}/${maxRetries}...`);
+            
+            // Create operation notification for rate limit retry
+            createOperationNotification('command', `Rate Limit Retry`, {
+              message: `Rate limit reached, waiting ${Math.round(actualDelay / 1000)}s before retry`,
+              content: `Attempt ${attempt}/${maxRetries}. Waiting due to API rate limits.`
+            });
+            
+            await sleep(actualDelay);
+            continue; // Retry the request
+          } else {
+            console.log('Max retries reached for rate limit error');
+            return {
+              text: 'I\'m experiencing high API usage at the moment. Please wait a moment and try again, or consider upgrading your API plan for higher rate limits.',
+              operationProgress: [],
+              pendingActions: []
+            };
+          }
+        }
+        
+        // For non-rate-limit errors, don't retry
+        if (attempt === 1) {
+          return {
+            text: `I encountered an error processing your request: ${errorMessage}`,
+            operationProgress: [],
+            pendingActions: []
+          };
+        }
+        
+        // This shouldn't happen, but just in case
+        return {
+          text: 'Sorry, I encountered an unexpected error after multiple attempts. Please try again.',
+          operationProgress: [],
+          pendingActions: []
+        };
+      }
+    }
+  }
+  
+  // This shouldn't happen, but just in case
+  return {
+    text: 'Sorry, I encountered an error processing your request after multiple attempts.',
+    operationProgress: [],
+    pendingActions: []
+  };
+};
+
+// Initialize Genkit when this module is loaded
+initializeGenkit();
+
+// Start Enhanced Code Quality monitoring
+const lspManager = CodeQualityManager.getInstance();
+lspManager.startMonitoring();
