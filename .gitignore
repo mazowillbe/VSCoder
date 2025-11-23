@@ -8,6 +8,12 @@ yarn-error.log*
 out/
 dist/
 *.tsbuildinfo
+apps/*/client/dist/
+apps/*/server/dist/
+apps/*/client/.vite/
+apps/*/client/node_modules/
+apps/*/server/node_modules/
+apps/*/node_modules/
 
 # VS Code extension packaging
 *.vsix
@@ -38,6 +44,8 @@ Thumbs.db
 # Logs
 logs
 *.log
+apps/*/logs/
+apps/*/*.log
 
 # Runtime data
 pids
@@ -47,9 +55,14 @@ pids
 
 # Coverage directory used by tools like istanbul
 coverage/
+apps/*/coverage/
 
 # nyc test coverage
 .nyc_output
+
+# Workspace storage directories (for ai-ide-gemini)
+apps/ai-ide-gemini/workspace/
+apps/ai-ide-gemini/.workspace/
 
 # Dependency directories
 jspm_packages/
