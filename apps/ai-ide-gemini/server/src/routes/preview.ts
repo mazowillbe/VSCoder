@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 
-// In-memory storage for preview URLs (in production, use a database)
+// In-memory storage for preview URLs
 const previewStore = new Map<string, {
   id: string;
   url: string;
@@ -29,9 +29,6 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'Invalid URL format' });
     }
 
-    const previewId = uuidv4();
-    const now = timestamp || Date.now();
-    
     // Deactivate all existing URLs for this project
     for (const [, preview] of previewStore.entries()) {
       if (preview.projectId === projectId) {
@@ -40,17 +37,17 @@ router.post('/', (req, res) => {
     }
 
     const newPreview = {
-      id: previewId,
+      id: uuidv4(),
       url,
       title: title || extractTitleFromUrl(url),
-      timestamp: now,
+      timestamp: timestamp || Date.now(),
       isActive: true,
       projectId: projectId || 'default'
     };
 
-    previewStore.set(previewId, newPreview);
+    previewStore.set(newPreview.id, newPreview);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       preview: newPreview
     });
@@ -65,7 +62,7 @@ router.get('/', (req, res) => {
   try {
     const { projectId } = req.query;
     
-    let previews = Array.from(previewStore.values());
+    const previews = Array.from(previewStore.values());
     
     if (projectId) {
       previews = previews.filter(p => p.projectId === projectId);
@@ -160,9 +157,8 @@ router.delete('/:id', (req, res) => {
     previewStore.delete(id);
 
     // If this was the active preview, activate another one if available
-    if (preview.isActive) {
-      const remainingPreviews = Array.from(previewStore.values())
-        .filter(p => p.projectId === preview.projectId);
+    const remainingPreviews = Array.from(previewStore.values())
+      .filter(p => p.projectId === preview.projectId);
       
       if (remainingPreviews.length > 0) {
         // Activate the most recent remaining preview

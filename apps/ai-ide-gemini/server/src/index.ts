@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { fileRouter } from './routes/files.js';
 import { chatRouter } from './routes/chat.js';
+import { webcontainerRouter } from './routes/webcontainer.js';
 import { previewRouter } from './routes/preview.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { validateEnv } from './utils/env.js';
@@ -30,6 +31,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/files', fileRouter);
 app.use('/api/chat', chatRouter);
+app.use('/api/webcontainer', webcontainerRouter);
 app.use('/api/preview', previewRouter);
 
 app.use(errorHandler);
