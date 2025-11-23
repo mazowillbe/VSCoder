@@ -2,11 +2,13 @@ import { useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { usePreviewStore, detectDevServerUrls } from '../store/previewStore';
 
 export default function Terminal() {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const { addPreviewUrl } = usePreviewStore();
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -30,6 +32,25 @@ export default function Terminal() {
     term.writeln('Welcome to AI IDE Terminal');
     term.writeln('Connected to server...');
     term.write('\r\n$ ');
+
+    // Set up data handler to detect preview URLs
+    const originalWrite = term.write.bind(term);
+    term.write = function(data: string) {
+      // Call original write function
+      originalWrite(data);
+      
+      // Check for preview URLs in the data
+      const urls = detectDevServerUrls(data);
+      if (urls.length > 0) {
+        // Add each detected URL to preview store
+        urls.forEach(url => {
+          // Add a small delay to avoid overwhelming the UI
+          setTimeout(() => {
+            addPreviewUrl(url, `Dev Server: ${new URL(url).host}`);
+          }, 100);
+        });
+      }
+    };
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;

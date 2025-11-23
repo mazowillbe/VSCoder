@@ -117,6 +117,12 @@ class ChatPanel {
             console.log('Opening settings...');
             vscode.commands.executeCommand('gemini-assistant.openSettings');
             break;
+          case 'openExternal':
+            console.log('Opening external URL:', message.url);
+            if (message.url) {
+              vscode.env.openExternal(vscode.Uri.parse(message.url));
+            }
+            break;
           default:
             console.log('Unknown command received:', message.command);
         }
