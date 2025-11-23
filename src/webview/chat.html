@@ -670,6 +670,13 @@
 
         function addOperationNotification(operation) {
             console.log('addOperationNotification called with:', operation);
+            
+            // Handle preview notifications specially
+            if (operation.type === 'create' && operation.message.startsWith('Preview detected:')) {
+                addPreviewNotification(operation);
+                return;
+            }
+            
             const isReadOperation = operation.type === 'read';
             const isListedOperation = operation.type === 'search' && operation.message.startsWith('Listed ');
             const isGrepOperation = operation.type === 'search' && operation.message.startsWith('Grepped ');
@@ -1154,6 +1161,84 @@
             messagesArea.appendChild(notificationDiv);
             scrollToBottom();
             console.log('File edit notification added to DOM:', notificationDiv);
+        }
+
+        function addPreviewNotification(operation) {
+            console.log('addPreviewNotification called with:', operation);
+            
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = 'operation-notification';
+            notificationDiv.setAttribute('data-operation-id', operation.operationId || `preview_${Date.now()}`);
+            
+            // Preview icon (globe/browser icon)
+            const icon = document.createElement('div');
+            icon.className = 'operation-icon create';
+            icon.innerHTML = '🌐';
+            icon.style.fontSize = '16px';
+            
+            const content = document.createElement('div');
+            content.className = 'operation-content';
+            
+            const title = document.createElement('div');
+            title.className = 'operation-title';
+            title.textContent = operation.message;
+            
+            const details = document.createElement('div');
+            details.className = 'operation-details';
+            details.textContent = `URL: ${operation.url}`;
+            
+            // Action buttons
+            const actions = document.createElement('div');
+            actions.className = 'operation-actions';
+            actions.style.marginTop = '8px';
+            actions.style.display = 'flex';
+            actions.style.gap = '8px';
+            
+            // Open in browser button
+            const openButton = document.createElement('button');
+            openButton.className = 'control-btn';
+            openButton.textContent = 'Open in Browser';
+            openButton.style.fontSize = '11px';
+            openButton.style.padding = '4px 8px';
+            openButton.addEventListener('click', () => {
+                if (operation.url) {
+                    // Send message to VS Code to open the URL
+                    vscode.postMessage({
+                        command: 'openExternal',
+                        url: operation.url
+                    });
+                }
+            });
+            
+            // Copy URL button
+            const copyButton = document.createElement('button');
+            copyButton.className = 'control-btn';
+            copyButton.textContent = 'Copy URL';
+            copyButton.style.fontSize = '11px';
+            copyButton.style.padding = '4px 8px';
+            copyButton.addEventListener('click', () => {
+                if (operation.url) {
+                    navigator.clipboard.writeText(operation.url).then(() => {
+                        copyButton.textContent = 'Copied!';
+                        setTimeout(() => {
+                            copyButton.textContent = 'Copy URL';
+                        }, 2000);
+                    });
+                }
+            });
+            
+            actions.appendChild(openButton);
+            actions.appendChild(copyButton);
+            
+            content.appendChild(title);
+            content.appendChild(details);
+            content.appendChild(actions);
+            
+            notificationDiv.appendChild(icon);
+            notificationDiv.appendChild(content);
+            
+            messagesArea.appendChild(notificationDiv);
+            scrollToBottom();
         }
 
         function scrollToBottom() {

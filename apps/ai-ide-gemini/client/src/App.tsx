@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Editor from './components/Editor';
 import Terminal from './components/Terminal';
 import Chat from './components/Chat';
 import Sidebar from './components/Sidebar';
+import PreviewModal from './components/PreviewModal';
+import { usePreviewStore } from './store/previewStore';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const { loadPreviewUrls } = usePreviewStore();
+
+  // Load existing preview URLs on app startup
+  useEffect(() => {
+    loadPreviewUrls();
+  }, [loadPreviewUrls]);
 
   return (
     <div className="flex h-screen bg-gray-900 text-gray-100">
@@ -25,6 +33,8 @@ function App() {
           <Chat />
         </div>
       </div>
+      
+      <PreviewModal />
     </div>
   );
 }

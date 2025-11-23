@@ -8,6 +8,40 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
+// Helper function to detect dev server URLs in text
+function detectDevServerUrls(text: string): string[] {
+  const urlPatterns = [
+    // localhost URLs with various ports
+    /https?:\/\/localhost:\d+(\/[^\s]*)?/gi,
+    // 127.0.0.1 URLs with various ports  
+    /https?:\/\/127\.0\.0\.1:\d+(\/[^\s]*)?/gi,
+    // 0.0.0.0 URLs with various ports
+    /https?:\/\/0\.0\.0\.0:\d+(\/[^\s]*)?/gi,
+    // Common dev server patterns
+    /https?:\/\/[a-zA-Z0-9.-]+\.local:\d+(\/[^\s]*)?/gi,
+    // IP addresses with ports
+    /https?:\/\/\d+\.\d+\.\d+\.\d+:\d+(\/[^\s]*)?/gi
+  ];
+
+  const urls: string[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const pattern of urlPatterns) {
+    const matches = text.match(pattern);
+    if (matches) {
+      for (const match of matches) {
+        const cleanUrl = match.trim();
+        if (!seenUrls.has(cleanUrl)) {
+          seenUrls.add(cleanUrl);
+          urls.push(cleanUrl);
+        }
+      }
+    }
+  }
+
+  return urls;
+}
+
 // Helper function to ensure terminal command output matches schema
 function ensureTerminalOutputSchema(result: any) {
   return {
@@ -73,6 +107,29 @@ export function createRunInTerminalTool(ai: Genkit) {
           exitCode: 0,
           stderr: stderr || ''
         };
+
+        // Detect preview URLs in the output
+        const allOutput = `${stdout || ''} ${stderr || ''}`;
+        const previewUrls = detectDevServerUrls(allOutput);
+        
+        if (previewUrls.length > 0) {
+          // Create preview notifications for each detected URL
+          previewUrls.forEach(url => {
+            try {
+              const urlObj = new URL(url);
+              const title = `Dev Server: ${urlObj.host}`;
+              
+              createOperationNotification('create', `Preview detected: ${title}`, {
+                url: url,
+                title: title,
+                type: 'preview',
+                filePath: workingDir
+              });
+            } catch {
+              // Invalid URL, skip
+            }
+          });
+        }
 
         console.log(`✅ Tool run_in_terminal succeeded:`, result);
         return ensureTerminalOutputSchema(result);
