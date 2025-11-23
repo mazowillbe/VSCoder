@@ -1,8 +1,17 @@
-# Gemini AI Assistant - VS Code Extension
+# Gemini AI Assistant
 
+A comprehensive suite of AI-powered development tools using Google's Gemini AI.
+
+This repository contains:
+- **VS Code Extension**: AI coding assistant integrated directly into VS Code
+- **AI IDE Web App**: Standalone web-based IDE with Gemini AI assistance (see `apps/ai-ide-gemini/`)
+
+## Projects
+
+### 1. VS Code Extension
 A VS Code extension that provides an AI-powered coding assistant using Google's Gemini AI through Genkit. This extension offers a chat interface similar to Copilot Chat with powerful workspace tools.
 
-## Features
+#### Features
 
 - 🤖 **AI Chat Interface**: Clean, modern chat UI integrated with VS Code's theme
 - 🛠️ **Workspace Tools**: Read, create, and modify files with AI assistance
@@ -10,11 +19,51 @@ A VS Code extension that provides an AI-powered coding assistant using Google's 
 - ⚡ **VS Code Integration**: Run VS Code commands and manage editors
 - 🛡️ **Safety First**: All destructive operations require user confirmation
 
-## Prerequisites
+#### Prerequisites
 
 - VS Code 1.74.0 or higher
 - Node.js 16.x or higher
 - Google Gemini API key
+
+See the full VS Code extension documentation below for installation and usage details.
+
+### 2. AI IDE Web App
+
+A full-stack web-based IDE powered by Google Gemini AI. Features a React 18 + TypeScript client with Monaco editor and xterm terminal, and an Express/TypeScript server with AI-powered code assistance.
+
+#### Features
+
+- 🎨 **Modern React UI**: Built with React 18, TypeScript, and Tailwind CSS
+- 📝 **Monaco Editor**: Full-featured code editor (VS Code's editor)
+- 💻 **Integrated Terminal**: xterm.js terminal for command execution
+- 🤖 **AI Assistant**: Gemini-powered chat for real-time code help
+- 📁 **File Management**: Browse, open, edit, and save workspace files
+- 🔄 **Hot Reload**: Vite + tsx watch for instant development feedback
+
+#### Quick Start
+
+```bash
+# Navigate to the AI IDE app
+cd apps/ai-ide-gemini
+
+# Install all dependencies (root, client, server)
+npm run install:all
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env and add your GEMINI_API_KEY and WORKSPACE_PATH
+
+# Start development servers (client + server with hot reload)
+npm run dev
+```
+
+Visit http://localhost:5173 to access the IDE.
+
+📖 **Full documentation**: See [`apps/ai-ide-gemini/README.md`](./apps/ai-ide-gemini/README.md) for complete setup, API docs, and troubleshooting.
+
+---
+
+## VS Code Extension - Installation & Usage
 
 ## Installation
 
