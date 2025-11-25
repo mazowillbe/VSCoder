@@ -107,3 +107,6 @@ jspm_packages/
 # TernJS port file
 .tern-port
 
+# Orphaned compiled files (no source)
+/test-file.js
+/test-file.js.map

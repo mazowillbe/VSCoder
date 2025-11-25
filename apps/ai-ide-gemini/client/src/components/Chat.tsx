@@ -1,14 +1,34 @@
 import { useState } from 'react';
 import classNames from 'classnames';
 import { useChatStore } from '../store/chatStore';
+import { useWebContainerStore } from '../store/webcontainerStore';
+import { useEditorStore } from '../store/editorStore';
+import OperationLogs from './OperationLogs';
 
 export default function Chat() {
   const { messages, sendMessage, isLoading } = useChatStore();
+  const { terminalHistory } = useWebContainerStore();
+  const { currentFile } = useEditorStore();
   const [input, setInput] = useState('');
+
+  const getWebContainerContext = () => {
+    const openFiles = currentFile ? [currentFile] : [];
+    const recentTerminalOutput = terminalHistory
+      .slice(-3)
+      .map((entry) => `${entry.command}: ${entry.output}${entry.error ? ` [ERROR: ${entry.error}]` : ''}`)
+      .join('\n');
+
+    return {
+      openFiles,
+      recentTerminalOutput: recentTerminalOutput || undefined,
+      currentPath: './',
+    };
+  };
 
   const handleSend = () => {
     if (input.trim() && !isLoading) {
-      sendMessage(input);
+      const context = getWebContainerContext();
+      sendMessage(input, context);
       setInput('');
     }
   };
@@ -42,6 +62,12 @@ export default function Chat() {
               })}
             >
               <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+              {msg.role === 'assistant' && (msg.operationLogs || msg.filesModified) && (
+                <OperationLogs
+                  logs={msg.operationLogs || []}
+                  filesModified={msg.filesModified}
+                />
+              )}
               <span className="text-xs text-gray-400 mt-1 block">
                 {new Date(msg.timestamp).toLocaleTimeString()}
               </span>
